@@ -74,7 +74,7 @@ function SavedTripCard({ trip, onUpdate, onDelete }: { trip: SavedTrip; onUpdate
   const payload = trip.payload;
 
   return (
-    <div className="border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 overflow-hidden">
+    <div className="border border-black/[0.05] dark:border-white/[0.1] rounded-[20px] bg-white dark:bg-[#2c2c2e] shadow-[0_8px_30px_rgba(0,0,0,0.08)] overflow-hidden">
       <div className="p-4 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 flex items-start justify-between gap-3">
         <div>
           <div className="flex items-center gap-2 font-semibold text-gray-900 dark:text-gray-100">
@@ -111,7 +111,7 @@ function SavedTripCard({ trip, onUpdate, onDelete }: { trip: SavedTrip; onUpdate
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
-            className={`flex-1 px-3 py-2 text-xs font-medium capitalize whitespace-nowrap ${
+            className={`flex-1 px-3 py-2 text-[13px] font-medium capitalize whitespace-nowrap ${
               activeTab === tab ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-600 bg-blue-50 dark:bg-blue-900/20' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/50'
             }`}
           >
@@ -137,7 +137,7 @@ function SavedTripCard({ trip, onUpdate, onDelete }: { trip: SavedTrip; onUpdate
                     href={bookingUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="block border border-gray-200 dark:border-gray-700 rounded-lg p-3 hover:border-blue-300 transition-colors no-underline"
+                    className="block border border-black/[0.05] dark:border-white/[0.1] rounded-2xl p-4 hover:border-blue-500/40 hover:shadow-md active:scale-95 transition-all duration-200 ease-out no-underline"
                   >
                     <div className="flex items-center justify-between">
                       <div className="font-medium text-gray-900 dark:text-gray-100">
@@ -150,13 +150,13 @@ function SavedTripCard({ trip, onUpdate, onDelete }: { trip: SavedTrip; onUpdate
                     <div className="text-sm text-gray-500 dark:text-gray-400">
                       {deal.airline} · {deal.cabin} · {formatDate(deal.departureDate)}
                     </div>
-                    <div className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+                    <div className="text-[13px] text-gray-400 dark:text-gray-500 mt-1">
                       {formatDuration(deal.duration)}
                       {deal.duration && deal.stops !== null && deal.stops !== undefined ? ' · ' : ''}
                       {formatStops(deal.stops)}
                     </div>
                     {deal.taxesAndFees ? (
-                      <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">+ ${Number(deal.taxesAndFees).toFixed(2)} taxes</div>
+                      <div className="text-[13px] text-gray-500 dark:text-gray-400 mt-1">+ ${Number(deal.taxesAndFees).toFixed(2)} taxes</div>
                     ) : null}
                   </a>
                 );
@@ -176,7 +176,7 @@ function SavedTripCard({ trip, onUpdate, onDelete }: { trip: SavedTrip; onUpdate
                   img: ({ src, alt }) => (
                     <figure className="my-3">
                       {src && <img src={src} alt={alt || ''} className="rounded-xl shadow-md w-full" loading="lazy" />}
-                      {alt && <figcaption className="text-xs text-gray-400 dark:text-gray-500 text-center mt-1">{alt}</figcaption>}
+                      {alt && <figcaption className="text-[13px] text-gray-400 dark:text-gray-500 text-center mt-1">{alt}</figcaption>}
                     </figure>
                   ),
                   h1: ({ children }) => <h1 className="text-lg font-bold text-gray-900 dark:text-gray-100 mt-2 mb-1">{children}</h1>,
@@ -204,13 +204,13 @@ function SavedTripCard({ trip, onUpdate, onDelete }: { trip: SavedTrip; onUpdate
                   href={link.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="block border border-gray-200 dark:border-gray-700 rounded-lg p-3 hover:border-blue-300 transition-colors no-underline"
+                  className="block border border-black/[0.05] dark:border-white/[0.1] rounded-2xl p-4 hover:border-blue-500/40 hover:shadow-md active:scale-95 transition-all duration-200 ease-out no-underline"
                 >
                   <div className="flex items-center gap-2 font-medium text-gray-900 dark:text-gray-100">
                     <Map size={16} className="text-blue-600" />
                     Day {link.day}: {link.title || 'Route'}
                   </div>
-                  <div className="text-xs text-blue-600 dark:text-blue-400 mt-1">Open in Google Maps →</div>
+                  <div className="text-[13px] text-blue-600 dark:text-blue-400 mt-1">Open in Google Maps →</div>
                 </a>
               ))
             ) : (
@@ -414,16 +414,19 @@ export default function OneStopPanel({ isOpen, onClose, savedTrips, setSavedTrip
       ) : null}
 
       <div
-        className={`fixed inset-0 z-50 flex items-center justify-center p-4 transition-opacity duration-300 ${
+        className={`fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 transition-opacity duration-300 ${
           isOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
         }`}
       >
         <div
-          className={`w-[95vw] h-[90vh] max-w-[1000px] max-h-[900px] bg-white dark:bg-gray-900 shadow-2xl rounded-2xl flex flex-col transform transition-all duration-300 ${
-            isOpen ? 'scale-100' : 'scale-95'
+          className={`w-full sm:w-[95vw] h-[92dvh] sm:h-[90vh] max-w-[1000px] max-h-[900px] bg-white/95 dark:bg-[#1c1c1e]/95 backdrop-blur-2xl backdrop-saturate-[1.8] border border-black/[0.05] dark:border-white/[0.1] shadow-[0_-12px_40px_rgba(0,0,0,0.16),0_20px_70px_rgba(0,0,0,0.2)] rounded-t-[24px] sm:rounded-[20px] flex flex-col transform transition-all duration-300 ease-out overflow-hidden ${
+            isOpen ? 'translate-y-0 scale-100' : 'translate-y-6 sm:translate-y-0 sm:scale-95'
           }`}
         >
-          <div className="p-5 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between bg-gray-50 dark:bg-gray-800/50 rounded-t-2xl">
+          <div className="sm:hidden pt-2.5 flex justify-center">
+            <div className="w-10 h-1.5 bg-gray-300 dark:bg-gray-600 rounded-full" />
+          </div>
+          <div className="px-5 py-3 border-b border-black/[0.05] dark:border-white/[0.1] flex items-center justify-between bg-white/70 dark:bg-[#1c1c1e]/70">
             <div className="flex items-center gap-4">
               <div className="flex items-center gap-2 font-semibold text-gray-900 dark:text-gray-100">
                 <Plane size={22} className="text-blue-600" /> One Stop
@@ -432,7 +435,7 @@ export default function OneStopPanel({ isOpen, onClose, savedTrips, setSavedTrip
                 <div className="flex gap-1 ml-2">
                   <button
                     onClick={() => setView('trips')}
-                    className={`px-3 py-1 text-xs font-medium rounded-lg transition-colors ${
+                    className={`px-3 py-1 text-[13px] font-medium rounded-lg transition-colors ${
                       view === 'trips'
                         ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300'
                         : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'
@@ -442,7 +445,7 @@ export default function OneStopPanel({ isOpen, onClose, savedTrips, setSavedTrip
                   </button>
                   <button
                     onClick={() => setView('alerts')}
-                    className={`px-3 py-1 text-xs font-medium rounded-lg transition-colors flex items-center gap-1 ${
+                    className={`px-3 py-1 text-[13px] font-medium rounded-lg transition-colors flex items-center gap-1 ${
                       view === 'alerts'
                         ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300'
                         : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'
@@ -456,8 +459,8 @@ export default function OneStopPanel({ isOpen, onClose, savedTrips, setSavedTrip
                 </div>
               )}
             </div>
-            <button onClick={onClose} className="p-2 text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100">
-              <X size={22} />
+            <button onClick={onClose} className="w-11 h-11 flex items-center justify-center rounded-full text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-black/[0.05] dark:hover:bg-white/[0.08] active:scale-95 transition-transform duration-200 ease-out" aria-label="Close One Stop">
+              <X size={20} />
             </button>
           </div>
 
@@ -468,7 +471,7 @@ export default function OneStopPanel({ isOpen, onClose, savedTrips, setSavedTrip
                 <div className="text-center text-gray-500 dark:text-gray-400 py-16">
                   <Bell size={32} className="mx-auto mb-3 text-gray-300 dark:text-gray-600" />
                   <p className="text-sm">Sign in to create deal alerts.</p>
-                  <p className="text-xs mt-1 text-gray-400 dark:text-gray-500">Get email notifications when new deals match your criteria.</p>
+                  <p className="text-[13px] mt-1 text-gray-400 dark:text-gray-500">Get email notifications when new deals match your criteria.</p>
                 </div>
               ) : (
                 <div className="max-w-2xl mx-auto space-y-6">
@@ -477,10 +480,10 @@ export default function OneStopPanel({ isOpen, onClose, savedTrips, setSavedTrip
                     <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-3 flex items-center gap-2">
                       <Bell size={16} className="text-blue-600" /> Create New Alert
                     </h3>
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">We'll email you when a new GOOD_DEAL matches your criteria. Leave fields blank for "any".</p>
+                    <p className="text-[13px] text-gray-500 dark:text-gray-400 mb-3">We'll email you when a new GOOD_DEAL matches your criteria. Leave fields blank for "any".</p>
                     <div className="grid grid-cols-2 gap-3 mb-3">
                       <div>
-                        <label className="text-xs text-gray-500 dark:text-gray-400 mb-1 block">Origin (IATA)</label>
+                        <label className="text-[13px] text-gray-500 dark:text-gray-400 mb-1 block">Origin (IATA)</label>
                         <input
                           type="text"
                           value={alertForm.origin}
@@ -490,7 +493,7 @@ export default function OneStopPanel({ isOpen, onClose, savedTrips, setSavedTrip
                         />
                       </div>
                       <div>
-                        <label className="text-xs text-gray-500 dark:text-gray-400 mb-1 block">Destination (IATA)</label>
+                        <label className="text-[13px] text-gray-500 dark:text-gray-400 mb-1 block">Destination (IATA)</label>
                         <input
                           type="text"
                           value={alertForm.destination}
@@ -500,7 +503,7 @@ export default function OneStopPanel({ isOpen, onClose, savedTrips, setSavedTrip
                         />
                       </div>
                       <div>
-                        <label className="text-xs text-gray-500 dark:text-gray-400 mb-1 block">Cabin</label>
+                        <label className="text-[13px] text-gray-500 dark:text-gray-400 mb-1 block">Cabin</label>
                         <select
                           value={alertForm.cabin}
                           onChange={(e) => setAlertForm({ ...alertForm, cabin: e.target.value })}
@@ -514,7 +517,7 @@ export default function OneStopPanel({ isOpen, onClose, savedTrips, setSavedTrip
                         </select>
                       </div>
                       <div>
-                        <label className="text-xs text-gray-500 dark:text-gray-400 mb-1 block">Month (YYYY-MM)</label>
+                        <label className="text-[13px] text-gray-500 dark:text-gray-400 mb-1 block">Month (YYYY-MM)</label>
                         <input
                           type="month"
                           value={alertForm.month}
@@ -525,7 +528,7 @@ export default function OneStopPanel({ isOpen, onClose, savedTrips, setSavedTrip
                     </div>
                     <div className="flex items-center gap-3">
                       <div className="flex-1">
-                        <label className="text-xs text-gray-500 dark:text-gray-400 mb-1 block">Min CPP (cents per point)</label>
+                        <label className="text-[13px] text-gray-500 dark:text-gray-400 mb-1 block">Min CPP (cents per point)</label>
                         <input
                           type="number"
                           step="0.1"
@@ -562,21 +565,21 @@ export default function OneStopPanel({ isOpen, onClose, savedTrips, setSavedTrip
                                 {alert.origin || 'Any'} → {alert.destination || 'Any'}
                               </span>
                               {alert.cabin && (
-                                <span className="text-xs bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 px-2 py-0.5 rounded-full">
+                                <span className="text-[13px] bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 px-2 py-0.5 rounded-full">
                                   {alert.cabin.replace('_', ' ')}
                                 </span>
                               )}
                               {alert.month && (
-                                <span className="text-xs bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 px-2 py-0.5 rounded-full">
+                                <span className="text-[13px] bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 px-2 py-0.5 rounded-full">
                                   {alert.month}
                                 </span>
                               )}
-                              <span className="text-xs bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300 px-2 py-0.5 rounded-full">
+                              <span className="text-[13px] bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300 px-2 py-0.5 rounded-full">
                                 ≥ {alert.minCPP}¢/pt
                               </span>
                             </div>
                             {alert.lastNotifiedAt && (
-                              <div className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+                              <div className="text-[13px] text-gray-400 dark:text-gray-500 mt-1">
                                 Last notified: {new Date(alert.lastNotifiedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
                               </div>
                             )}
@@ -584,7 +587,7 @@ export default function OneStopPanel({ isOpen, onClose, savedTrips, setSavedTrip
                           <div className="flex items-center gap-2 ml-3">
                             <button
                               onClick={() => toggleAlert(alert.id, alert.isActive)}
-                              className={`text-xs px-2 py-1 rounded-lg transition-colors ${
+                              className={`text-[13px] px-2 py-1 rounded-lg transition-colors ${
                                 alert.isActive
                                   ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300'
                                   : 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400'
@@ -628,7 +631,7 @@ export default function OneStopPanel({ isOpen, onClose, savedTrips, setSavedTrip
             <div className="flex-1 flex overflow-hidden">
               {/* Trip selector sidebar */}
               <div className="w-56 border-r border-gray-100 dark:border-gray-800 flex flex-col flex-shrink-0">
-                <div className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide px-4 py-3 border-b border-gray-50 dark:border-gray-800">
+                <div className="text-[13px] font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide px-4 py-3 border-b border-gray-50 dark:border-gray-800">
                   Saved Trips ({savedTrips.length})
                 </div>
                 <div className="flex-1 overflow-y-auto p-2 space-y-1">
@@ -648,7 +651,7 @@ export default function OneStopPanel({ isOpen, onClose, savedTrips, setSavedTrip
                           {trip.destination || 'Trip'}
                         </span>
                       </div>
-                      <div className="text-xs text-gray-400 dark:text-gray-500 mt-1 ml-5 truncate">
+                      <div className="text-[13px] text-gray-400 dark:text-gray-500 mt-1 ml-5 truncate">
                         {trip.dates || 'Dates TBD'}
                       </div>
                     </button>

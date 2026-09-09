@@ -170,6 +170,16 @@ function recommendMode(walkMin: number | null, driveMin: number | null, distance
     return { mode: '🚶 Walk', note: `~${walkMin} min walk` };
   }
 
+  if (walkMin === null && distanceKm !== null) {
+    const estimatedWalkMinutes = Math.max(1, Math.round((distanceKm / 4.8) * 60));
+    if (distanceKm <= 2) {
+      return { mode: '🚶 Walk', note: `About ${estimatedWalkMinutes} min on foot based on distance (${distanceKm}km)` };
+    }
+    if (driveMin !== null) {
+      return { mode: '🚌 Transit/🚕 Taxi', note: `~${driveMin} min by taxi; check local transit (${distanceKm}km)` };
+    }
+  }
+
   // Medium distance — walk if driving isn't much faster
   if (walkMin !== null && walkMin <= 25 && (!driveMin || driveMin >= 8)) {
     return { mode: '🚶 Walk', note: `~${walkMin} min walk (${distanceKm}km)` };
@@ -190,19 +200,22 @@ function recommendMode(walkMin: number | null, driveMin: number | null, distance
 
   // Long distance — use locally available road or public transport
   if (distanceKm !== null && distanceKm > 5 && distanceKm <= 15) {
-    return { mode: '� Transit/🚕 Taxi', note: `~${driveMin || 20} min by local transit or taxi (${distanceKm}km)` };
+    return { mode: '🚌 Transit/🚕 Taxi', note: `~${driveMin || 20} min by local transit or taxi (${distanceKm}km)` };
   }
 
   // Very long distance — avoid assuming a rail network exists
   if (distanceKm !== null && distanceKm > 15) {
-    return { mode: '� Transit/� Taxi', note: `~${driveMin || 30} min by local transit or taxi (${distanceKm}km)` };
+    return { mode: '🚌 Transit/🚕 Taxi', note: `~${driveMin || 30} min by local transit or taxi (${distanceKm}km)` };
   }
 
   // Fallback
-  return {
-    mode: '🚇 Transit',
-    note: `${walkMin ? `~${walkMin} min walk` : 'unknown walk'} or ${driveMin ? `~${driveMin} min transit` : 'unknown transit'}`,
-  };
+  if (walkMin !== null) {
+    return { mode: '🚶 Walk/🚇 Transit', note: `~${walkMin} min walk; local transit may be faster` };
+  }
+  if (driveMin !== null) {
+    return { mode: '🚌 Transit/🚕 Taxi', note: `~${driveMin} min by taxi; check local transit` };
+  }
+  return { mode: '🚌 Transit/🚕 Taxi', note: 'Check local transit or taxi options' };
 }
 
 async function buildDayTransport(

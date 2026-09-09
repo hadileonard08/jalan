@@ -24,17 +24,19 @@ export default function ThemeToggle({ className = '' }: { className?: string }) 
   };
 
   if (!mounted) {
-    return <div className={`w-9 h-9 ${className}`} />;
+    return <div className={`w-11 h-11 ${className}`} />;
   }
 
   return (
     <button
       onClick={toggle}
-      className={`p-2 rounded-lg text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors ${className}`}
+      className={`w-11 h-11 flex items-center justify-center rounded-full text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100 hover:bg-black/[0.05] dark:hover:bg-white/[0.08] active:scale-95 transition-all duration-200 ease-out ${className}`}
       title={dark ? 'Switch to light mode' : 'Switch to dark mode'}
       aria-label="Toggle theme"
     >
-      {dark ? <Sun size={18} /> : <Moon size={18} />}
+      <span key={dark ? 'light' : 'dark'} className="message-fade-in">
+        {dark ? <Sun size={19} /> : <Moon size={19} />}
+      </span>
     </button>
   );
 }

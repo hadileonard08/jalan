@@ -3,8 +3,40 @@
 @tailwind utilities;
 
 /* Prevent horizontal scroll on mobile from wide content */
+:root {
+  color-scheme: light;
+  --jalan-accent: 0 122 255;
+  --jalan-bg: 245 245 247;
+  --jalan-surface: 255 255 255;
+  --jalan-text: 29 29 31;
+  --jalan-secondary: 110 110 115;
+  --jalan-separator: 60 60 67;
+}
+
+.dark {
+  color-scheme: dark;
+  --jalan-accent: 10 132 255;
+  --jalan-bg: 0 0 0;
+  --jalan-surface: 28 28 30;
+  --jalan-text: 242 242 247;
+  --jalan-secondary: 174 174 178;
+  --jalan-separator: 84 84 88;
+}
+
 html, body {
   overflow-x: hidden;
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background: rgb(var(--jalan-bg));
+  color: rgb(var(--jalan-text));
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", Arial, sans-serif;
+  font-size: 17px;
+  line-height: 22px;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
 }
 
 /* Ensure images and code blocks never overflow their container */
@@ -27,7 +59,7 @@ pre, code {
 
 /* Message fade-in animation */
 .message-fade-in {
-  animation: messageFadeIn 0.3s ease-out;
+  animation: messageFadeIn 0.24s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 @keyframes messageFadeIn {
@@ -43,18 +75,24 @@ pre, code {
 
 /* Day card styling — visual separation between itinerary days */
 .day-card {
-  background: linear-gradient(to right, rgba(59, 130, 246, 0.02), transparent 30%);
-  transition: box-shadow 0.2s ease;
+  background: rgba(var(--jalan-surface), 0.92);
+  border: 1px solid rgba(var(--jalan-separator), 0.12);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03), 0 8px 28px rgba(0, 0, 0, 0.04);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 
 .day-card:hover {
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.04), 0 12px 36px rgba(0, 0, 0, 0.07);
 }
 
 /* Day card images — rounded with shadow */
 .day-card img {
-  border-radius: 0.75rem;
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-radius: 1rem;
+  box-shadow: none;
 }
 
 /* Smooth scroll for section navigation */
@@ -75,4 +113,44 @@ html {
 }
 .overflow-y-auto::-webkit-scrollbar-thumb:hover {
   background: rgba(0, 0, 0, 0.2);
+}
+
+button, a, textarea, input {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button, [role="button"], a {
+  transition-property: color, background-color, border-color, opacity, box-shadow, transform;
+  transition-duration: 200ms;
+  transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+button, [role="button"] {
+  min-height: 44px;
+}
+
+button:has(> svg:only-child) {
+  min-width: 44px;
+}
+
+button:not(:disabled):active, [role="button"]:active, a:active {
+  transform: scale(0.95);
+}
+
+button:focus-visible, a:focus-visible, textarea:focus-visible, input:focus-visible, [role="button"]:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(var(--jalan-bg), 1), 0 0 0 4px rgba(var(--jalan-accent), 0.5);
+}
+
+::selection {
+  background: rgba(var(--jalan-accent), 0.2);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
