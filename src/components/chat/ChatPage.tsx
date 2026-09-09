@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Send, Plane, Loader2, History, Plus, LogIn, MapPin, Calendar, Sun, Wind, Droplets, Briefcase, Trash2, Bookmark, Map, Menu, X, List, Navigation, Share2, Image as ImageIcon } from 'lucide-react';
+import { Send, Plane, Loader2, History, Plus, LogIn, MapPin, Calendar, Sun, Wind, Droplets, Briefcase, Trash2, Bookmark, Map, Menu, X, List, Navigation, Share2, ChevronLeft, ChevronRight, Image as ImageIcon } from 'lucide-react';
 import { useUser, SignInButtonWrapper, UserButtonWrapper } from '@/components/AuthProvider';
 import { getAirlineBookingUrl } from '@/lib/airline-booking';
 import useSWR, { mutate } from 'swr';
@@ -599,6 +599,7 @@ export default function ChatPage() {
   const [sectionsOpen, setSectionsOpen] = useState(false);
   const [savedTrips, setSavedTrips] = useState<SavedTrip[]>([]);
   const [showSignInPrompt, setShowSignInPrompt] = useState(false);
+  const [desktopSidebarOpen, setDesktopSidebarOpen] = useState(true);
   const messagesRef = useRef<HTMLDivElement>(null);
 
   // Load saved trips — from API if signed in, from localStorage if guest.
@@ -894,19 +895,30 @@ export default function ChatPage() {
   return (
     <div className="flex h-[100dvh] bg-[#f5f5f7] dark:bg-black overflow-x-hidden font-sans text-[17px] leading-[22px]">
       {/* Desktop Sidebar */}
-      <aside className="w-72 bg-white/80 dark:bg-[#1c1c1e]/90 backdrop-blur-xl backdrop-saturate-[1.8] border-r border-black/[0.05] dark:border-white/[0.1] flex-col hidden md:flex">
-        <a href="/" className="h-16 px-5 flex items-center gap-2.5 border-b border-black/[0.05] dark:border-white/[0.1] hover:bg-black/[0.025] dark:hover:bg-white/[0.05] transition-colors">
-          <WalkersIcon className="text-blue-600" size={24} />
-          <span className="font-semibold tracking-tight text-xl text-gray-950 dark:text-white">Jalan</span>
-        </a>
-        <SidebarContent
-          conversations={conversations}
-          activeConversationId={activeConversationId}
-          onLoadConversation={loadConversation}
-          onNewChat={startNewChat}
-          onOpenOneStop={() => setOneStopOpen(true)}
-          isSignedIn={isSignedIn}
-        />
+      <aside className={`${desktopSidebarOpen ? 'w-72' : 'w-20'} bg-white/80 dark:bg-[#1c1c1e]/90 backdrop-blur-xl backdrop-saturate-[1.8] border-r border-black/[0.05] dark:border-white/[0.1] flex-col hidden md:flex transition-all duration-300`}>
+        <div className="h-16 border-b border-black/[0.05] dark:border-white/[0.1] flex items-center justify-between px-3">
+          <a href="/" className="flex items-center gap-2.5 hover:opacity-80 transition-opacity">
+            <WalkersIcon className="text-blue-600" size={24} />
+            {desktopSidebarOpen && <span className="font-semibold tracking-tight text-xl text-gray-950 dark:text-white">Jalan</span>}
+          </a>
+          <button
+            onClick={() => setDesktopSidebarOpen(!desktopSidebarOpen)}
+            className="p-1.5 rounded-lg text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-black/[0.05] dark:hover:bg-white/[0.08] transition-colors"
+            aria-label={desktopSidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
+          >
+            {desktopSidebarOpen ? <ChevronLeft size={20} /> : <ChevronRight size={20} />}
+          </button>
+        </div>
+        {desktopSidebarOpen && (
+          <SidebarContent
+            conversations={conversations}
+            activeConversationId={activeConversationId}
+            onLoadConversation={loadConversation}
+            onNewChat={startNewChat}
+            onOpenOneStop={() => setOneStopOpen(true)}
+            isSignedIn={isSignedIn}
+          />
+        )}
       </aside>
 
       {/* Mobile sidebar drawer */}
@@ -1129,7 +1141,7 @@ export default function ChatPage() {
             return (
               <>
                 {/* Desktop — section navigation rail */}
-                <nav className="hidden lg:flex flex-col w-56 bg-white/40 dark:bg-[#1c1c1e]/40 border-l border-black/[0.05] dark:border-white/[0.1] py-5 px-3 h-full overflow-hidden">
+                <nav className={`hidden lg:flex flex-col bg-white/40 dark:bg-[#1c1c1e]/40 border-l border-black/[0.05] dark:border-white/[0.1] py-5 px-3 h-full overflow-hidden transition-all duration-300 ${desktopSidebarOpen ? 'w-56' : 'w-72'}`}>
                   <div className="overflow-y-auto flex-1 space-y-0.5">
                     {sectionButtons}
                   </div>

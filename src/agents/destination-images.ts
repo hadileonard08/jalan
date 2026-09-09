@@ -129,6 +129,16 @@ function isBadImageUrl(url: string | null | undefined): boolean {
   return BAD_IMAGE_PATTERNS.some(pattern => pattern.test(url));
 }
 
+const CULTURAL_LANDMARKS = new Set(['shrine', 'temple', 'palace', 'garden', 'cathedral', 'mosque', 'church', 'castle', 'monastery', 'chapel']);
+const SPORTS_VENUE_WORDS = ['stadium', 'baseball', 'arena', 'ballpark', 'pitch', 'soccer', 'football', 'basketball', 'rugby', 'cricket', 'tennis'];
+
+function hasMismatchWord(title: string, url: string, term: string): boolean {
+  const termWords = new Set(term.toLowerCase().split(/\s+/).filter(Boolean));
+  if (![...termWords].some((w) => CULTURAL_LANDMARKS.has(w))) return false;
+  const text = `${title} ${url}`.toLowerCase();
+  return SPORTS_VENUE_WORDS.some((w) => text.includes(w) && !termWords.has(w));
+}
+
 /**
  * Check whether the image URL/filename plausibly relates to the search term.
  * If the URL path contains none of the distinctive words from the term,
@@ -136,6 +146,7 @@ function isBadImageUrl(url: string | null | undefined): boolean {
  * Bali monkey forest search).
  */
 function urlMatchesTerm(url: string, term: string): boolean {
+  if (hasMismatchWord('', url, term)) return false;
   // Normalize both URL and term: strip punctuation to plain words
   const normalize = (s: string) => decodeURIComponent(s).toLowerCase().replace(/[^a-z0-9]/g, ' ');
   const decoded = normalize(url);
@@ -179,6 +190,7 @@ function cleanTerm(term: string): string {
 }
 
 export function scoreImageRelevance(title: string, term: string): number {
+  if (hasMismatchWord(title, '', term)) return 0;
   const normalize = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9\s]/g, ' ');
   const titleWords = normalize(title).split(/\s+/).filter(Boolean);
   const termWords = normalize(term).split(/\s+/).filter(w => w.length > 2);
