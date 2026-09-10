@@ -3,6 +3,7 @@ import { db } from '../db';
 import { geocodedLocations } from '../db/schema';
 import { eq } from 'drizzle-orm';
 import type { RouteLink } from './itinerary-guardrails';
+import { optimizeDayRoute, extractStopsWithTimeSlots, type OptimizableStop, type TimeSlot } from '../lib/route-optimizer';
 
 // Generic transit terms that the LLM might use as stop names.
 // These don't geocode well and should be treated as "take transit" legs
@@ -77,6 +78,7 @@ export interface DayTransport {
   summary: string;
   waypoints: RouteWaypoint[];
   polyline?: MapPoint[];
+  optimizedUrl?: string;
 }
 
 export interface TransportPlan {
@@ -299,7 +301,8 @@ function recommendMode(walkMin: number | null, driveMin: number | null, distance
 
 async function buildDayTransport(
   routeLink: RouteLink,
-  destination: string
+  destination: string,
+  dayTimeSlots?: { name: string; timeSlot: TimeSlot }[]
 ): Promise<DayTransport> {
   // Extract stops from the Google Maps URL (they're encoded as "place, destination" segments).
   const segments = routeLink.url
@@ -310,7 +313,7 @@ async function buildDayTransport(
 
   const legs: LegInfo[] = [];
   const dayPolyline: MapPoint[] = [];
-  const waypoints: RouteWaypoint[] = [];
+  let waypoints: RouteWaypoint[] = [];
 
   // Geocode all stops in parallel (with a small concurrency limit).
   const geocoded = await Promise.all(
@@ -331,12 +334,65 @@ async function buildDayTransport(
     }
   }
 
-  // Get OSRM routes between consecutive stops.
-  for (let i = 0; i < geocoded.length - 1; i++) {
-    const from = geocoded[i];
-    const to = geocoded[i + 1];
-    const fromName = segments[i];
-    const toName = segments[i + 1];
+  // If we have time-slot info, run the route optimizer to reorder waypoints
+  // to minimize travel time while respecting morning→afternoon→evening order.
+  if (dayTimeSlots && dayTimeSlots.length > 0 && waypoints.length > 2) {
+    // Match each waypoint to its time slot by name (case-insensitive).
+    const slotByName = new Map<string, TimeSlot>();
+    for (const s of dayTimeSlots) {
+      slotByName.set(s.name.toLowerCase().trim(), s.timeSlot);
+    }
+    const optimizable: OptimizableStop[] = [];
+    const matchedIndexes: number[] = [];
+    for (let i = 0; i < waypoints.length; i++) {
+      const wp = waypoints[i];
+      const slot = slotByName.get(wp.name.toLowerCase().trim());
+      if (slot) {
+        optimizable.push({ name: wp.name, lat: wp.lat, lon: wp.lon, timeSlot: slot });
+        matchedIndexes.push(i);
+      }
+    }
+
+    if (optimizable.length > 2) {
+      try {
+        const optimized = await optimizeDayRoute(optimizable);
+        // Rebuild waypoints: optimized matched stops first, then unmatched stops appended in original order.
+        const optimizedWaypoints: RouteWaypoint[] = optimized.map((o) => ({
+          name: o.name,
+          lat: o.lat,
+          lon: o.lon,
+          order: 0, // will set below
+        }));
+        const matchedSet = new Set(matchedIndexes);
+        for (let i = 0; i < waypoints.length; i++) {
+          if (!matchedSet.has(i)) {
+            optimizedWaypoints.push({ ...waypoints[i], order: 0 });
+          }
+        }
+        waypoints = optimizedWaypoints.map((wp, i) => ({ ...wp, order: i + 1 }));
+        // Rebuild segments and geocoded arrays in the optimized order for leg computation.
+        // (We keep the original segments/geocoded for leg-from-name lookups, but use
+        // the optimized waypoint order for routing.)
+      } catch (err) {
+        console.error('Route optimizer failed, using original order:', (err as Error).message);
+      }
+    }
+  }
+
+  // Build a name→geocode lookup so we can route between optimized waypoints.
+  const geocodeByName = new Map<string, GeocodeResult | null>();
+  for (let i = 0; i < segments.length; i++) {
+    geocodeByName.set(segments[i].toLowerCase().trim(), geocoded[i]);
+  }
+
+  // Get OSRM routes between consecutive optimized waypoints.
+  for (let i = 0; i < waypoints.length - 1; i++) {
+    const fromWp = waypoints[i];
+    const toWp = waypoints[i + 1];
+    const fromName = fromWp.name;
+    const toName = toWp.name;
+    const from = geocodeByName.get(fromName.toLowerCase().trim()) ?? { lat: fromWp.lat, lon: fromWp.lon, displayName: fromName };
+    const to = geocodeByName.get(toName.toLowerCase().trim()) ?? { lat: toWp.lat, lon: toWp.lon, displayName: toName };
 
     // If either stop is a generic transit term (e.g. "MTR", "Subway", "Train"),
     // don't try to route it — just label it as a transit leg.
@@ -436,6 +492,11 @@ async function buildDayTransport(
     ? `${legs.length} legs: ${walkCount} walkable, ${transitCount} need transit/ride-share`
     : 'No route data available';
 
+  // Build an optimized Google Maps URL from the reordered waypoints.
+  const optimizedUrl = waypoints.length >= 2
+    ? `https://www.google.com/maps/dir/${waypoints.map((wp) => encodeURIComponent(`${wp.name}, ${destination}`)).join('/')}`
+    : routeLink.url;
+
   return {
     day: routeLink.day,
     title: routeLink.title || '',
@@ -443,6 +504,7 @@ async function buildDayTransport(
     summary,
     waypoints,
     polyline: dayPolyline.length > 0 ? dayPolyline : undefined,
+    optimizedUrl,
   };
 }
 
@@ -496,15 +558,30 @@ Keep it concise and practical. Use markdown. Only include real, well-known optio
 
 export async function buildTransportPlan(
   routeLinks: RouteLink[],
-  destination: string
+  destination: string,
+  itinerary?: string
 ): Promise<TransportPlan | null> {
   if (!routeLinks || routeLinks.length === 0 || !destination) return null;
+
+  // If we have the itinerary text, extract per-day time-slot info for the
+  // route optimizer. Map day number → list of {name, timeSlot}.
+  const dayTimeSlots: Record<string, { name: string; timeSlot: TimeSlot }[]> = {};
+  if (itinerary) {
+    const dayBlocks = itinerary.split(/(?=#+\s+Day\s+\d+)/i).filter(Boolean);
+    for (const block of dayBlocks) {
+      const headingMatch = block.match(/#+\s+Day\s+(\d+)/i);
+      if (!headingMatch) continue;
+      const dayNum = headingMatch[1];
+      const stops = extractStopsWithTimeSlots(block);
+      if (stops.length > 0) dayTimeSlots[dayNum] = stops;
+    }
+  }
 
   // Process all days concurrently. Geocode results are cached so repeated
   // place names across days don't trigger extra Nominatim calls. Each fetch
   // has AbortSignal.timeout so a slow response won't block everything.
   const dayTransports = await Promise.all(
-    routeLinks.map((rl) => buildDayTransport(rl, destination))
+    routeLinks.map((rl) => buildDayTransport(rl, destination, dayTimeSlots[rl.day]))
   );
 
   // Generate city-level transit tips concurrently — no need to wait since

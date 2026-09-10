@@ -505,10 +505,20 @@ async function enrichNode(state: typeof ConversationStateAnnotation.State) {
   // Run transport and images concurrently — they are independent.
   const [transportPlan, itineraryWithImages] = await Promise.all([
     routeLinks.length > 0
-      ? buildTransportPlan(routeLinks, destination).catch(() => null)
+      ? buildTransportPlan(routeLinks, destination, state.itinerary).catch(() => null)
       : Promise.resolve(null),
     hydrateItineraryImages(state.itinerary, destination).catch(() => state.itinerary),
   ]);
+
+  // Update route links with optimized Google Maps URLs from the route optimizer.
+  if (transportPlan?.days) {
+    for (const day of transportPlan.days) {
+      const link = routeLinks.find((rl) => rl.day === day.day);
+      if (link && day.optimizedUrl) {
+        link.url = day.optimizedUrl;
+      }
+    }
+  }
 
   // Inject transport notes into the already-image-hydrated itinerary.
   const itinerary = transportPlan
@@ -815,6 +825,11 @@ Requirements:
 - Plan EXACTLY ${numDays} days. Do not add or skip days.${numDays >= MAX_TRIP_DAYS ? ' (Note: the trip was capped at 30 days — mention this naturally in the intro if the user asked for longer.)' : ''}
 - Never schedule travel, reservations, performances, games, festivals, or other events on a date before today (${new Date().toISOString().split('T')[0]}). Exclude stale past events from retrieved context.
 - MANDATORY: For EACH day, you MUST include exactly one image placeholder immediately after the day heading, in this exact format: ![IMAGE: specific landmark name]. No URLs. This is required for every single day — do not skip any day. Pick iconic, specific places (e.g. "Notre-Dame Cathedral", "Sagrada Familia", "Senso-ji Temple"), not generic city names. Always use the ENGLISH name of the landmark (e.g. "Helsinki Cathedral" not "Helsingin Tuomiokirkko", "Church of the Rock" not "Temppeliaukio Kirkko").
+- MANDATORY: For EACH day, organize the day into three time blocks with clear sub-headings in this exact format:
+  **🌅 Morning:** <activities and stops>
+  **🌞 Afternoon:** <activities and stops>
+  **🌙 Evening:** <activities and stops>
+  Every stop/landmark must fall under exactly one of these three time blocks. Schedule museums, galleries, and outdoor attractions in the Morning or Afternoon (when they are open). Reserve Evening for dinner, nightlife, illuminated landmarks, and evening walks. Never schedule a museum or gallery visit in the Evening block.
 - Bold every landmark, neighborhood, or major stop you mention in the day plan (e.g. **Louvre Museum**, **Montmartre**, **Eiffel Tower**). This is used to generate walking/transit maps.
 - Do not claim upgrades, partner airlines, or premium in-flight services unless cabin is BUSINESS/FIRST.
 - Do not invent traveler names.
@@ -940,6 +955,26 @@ async function guardrailsNode(state: typeof ConversationStateAnnotation.State) {
   const pastDates = findPastCalendarDates(state.itinerary);
   if (pastDates.length > 0) {
     feedback.push(`The itinerary contains past calendar dates: ${pastDates.join(', ')}. Remove past events and regenerate the plan using only current or future travel dates and events.`);
+  }
+
+  // Check 3: Verify each day has Morning/Afternoon/Evening time blocks.
+  // Only flag if the day has NONE of the three time slots — individual missing
+  // slots are a formatting preference, not a safety issue.
+  const dayBlocks = state.itinerary.split(/(?=#+\s+Day\s+\d+)/i).filter(Boolean);
+  const daysMissingAllTimeBlocks: string[] = [];
+  for (const block of dayBlocks) {
+    const headingMatch = block.match(/#+\s+Day\s+(\d+)/i);
+    if (!headingMatch) continue;
+    const dayNum = headingMatch[1];
+    const hasMorning = /morning/i.test(block);
+    const hasAfternoon = /afternoon/i.test(block);
+    const hasEvening = /evening/i.test(block);
+    if (!hasMorning && !hasAfternoon && !hasEvening) {
+      daysMissingAllTimeBlocks.push(`Day ${dayNum}`);
+    }
+  }
+  if (daysMissingAllTimeBlocks.length > 0) {
+    feedback.push(`The following days have no time blocks at all: ${daysMissingAllTimeBlocks.join(', ')}. Reformat each day with three sub-sections using **🌅 Morning:**, **🌞 Afternoon:**, and **🌙 Evening:** headings.`);
   }
 
   return { criticFeedback: feedback };
