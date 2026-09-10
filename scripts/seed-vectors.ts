@@ -6,8 +6,8 @@ const PEXELS_API_KEY = process.env.PEXELS_API_KEY;
 
 // Tuned to keep memory and per-provider rate limits sane while maximizing diversity.
 const BATCH_SIZE = 16;
-const PER_SOURCE = 3; // only a few per term per source — avoids 100 pictures of the same temple
-const SLEEP_MS = 120; // small pause between search terms
+const PER_SOURCE = 5; // small cap per term/source — no single landmark hogs the DB
+const SLEEP_MS = 80; // small pause between search terms
 
 // Diverse search variants per destination. This spreads the corpus across cityscapes,
 // landmarks, food markets, nature, and architecture instead of one bucket per city.
@@ -134,7 +134,7 @@ async function fetchOpenverseUrls(term: string, limit: number): Promise<Candidat
       `https://api.openverse.org/v1/images/?q=${encodeURIComponent(term)}&page_size=${Math.min(limit * 2, 20)}`,
       {
         headers: { 'User-Agent': 'Jalan Image Search/1.0 (seed)' },
-        signal: AbortSignal.timeout(8000),
+        signal: AbortSignal.timeout(5000),
       }
     );
     if (!res.ok) return [];
@@ -164,7 +164,7 @@ async function fetchPexelsUrls(term: string, limit: number): Promise<Candidate[]
       `https://api.pexels.com/v1/search?query=${encodeURIComponent(term)}&per_page=${Math.min(limit * 2, 15)}&orientation=landscape`,
       {
         headers: { Authorization: PEXELS_API_KEY },
-        signal: AbortSignal.timeout(8000),
+        signal: AbortSignal.timeout(5000),
       }
     );
     if (!res.ok) return [];
@@ -190,17 +190,16 @@ async function fetchPexelsUrls(term: string, limit: number): Promise<Candidate[]
 async function fetchAllUrls(term: string, limit: number): Promise<Candidate[]> {
   // Start with the fastest, most reliable source (Wikimedia Commons).
   const candidates = await fetchWikimediaUrls(term, limit);
-  if (candidates.length >= limit) return candidates.slice(0, limit);
 
-  // Fall back to Openverse only if Wikimedia didn't have enough for this term.
-  const openverse = await fetchOpenverseUrls(term, limit - candidates.length);
-  candidates.push(...openverse);
-  if (candidates.length >= limit) return candidates.slice(0, limit);
-
-  // Fall back to Pexels last, if configured.
-  if (PEXELS_API_KEY) {
-    const pexels = await fetchPexelsUrls(term, limit - candidates.length);
-    candidates.push(...pexels);
+  // Only hit slow third-party sources when Wikimedia has nothing usable.
+  // This keeps the seed fast while preserving diversity.
+  if (candidates.length === 0) {
+    const openverse = await fetchOpenverseUrls(term, limit);
+    candidates.push(...openverse);
+    if (candidates.length === 0 && PEXELS_API_KEY) {
+      const pexels = await fetchPexelsUrls(term, limit);
+      candidates.push(...pexels);
+    }
   }
 
   return candidates.slice(0, limit);
