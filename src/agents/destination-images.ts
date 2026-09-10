@@ -1,4 +1,5 @@
 import { AIRPORT_NAMES } from '../lib/airports';
+import { stemmer } from 'stemmer';
 
 const WIKIPEDIA_CITIES: Record<string, string> = {
   // Asia
@@ -129,6 +130,29 @@ interface ImageCandidate {
   score: number;
 }
 
+export interface ImageMetadata {
+  title: string;
+  tags: string[];
+}
+
+function levenshtein(a: string, b: string): number {
+  const m = a.length;
+  const n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  let prev = new Array(n + 1).fill(0).map((_, i) => i);
+  let curr = new Array(n + 1);
+  for (let i = 1; i <= m; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
+    }
+    [prev, curr] = [curr, prev];
+  }
+  return prev[n];
+}
+
 function isBadImageUrl(url: string | null | undefined): boolean {
   if (!url) return true;
   return BAD_IMAGE_PATTERNS.some(pattern => pattern.test(url));
@@ -194,10 +218,10 @@ function cleanTerm(term: string): string {
     .trim();
 }
 
-export function scoreImageRelevance(title: string, term: string): number {
-  if (hasMismatchWord(title, '', term)) return 0;
+export function scoreImageRelevance(image: ImageMetadata, term: string, originalRankIndex = 0): number {
+  if (hasMismatchWord(`${image.title} ${image.tags.join(' ')}`, '', term)) return 0;
   const normalize = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9\s]/g, ' ');
-  const titleWords = normalize(title).split(/\s+/).filter(Boolean);
+  const candidateWords = [...new Set(normalize(`${image.title} ${image.tags.join(' ')}`).split(/\s+/).filter(Boolean))];
   const termWords = normalize(term).split(/\s+/).filter(w => w.length > 2);
   if (termWords.length === 0) return 0;
   const genericWords = new Set([
@@ -206,19 +230,26 @@ export function scoreImageRelevance(title: string, term: string): number {
     'street', 'temple', 'tower',
   ]);
   const matchedWords = termWords.filter((word) => {
-    const singularWord = word.replace(/s$/, '');
-    return titleWords.some((titleWord) => {
-      const singularTitle = titleWord.replace(/s$/, '');
-      return singularTitle === singularWord
-        || (word.length >= 5 && titleWord.includes(word))
-        || (word.length >= 5 && word.includes(titleWord) && titleWord.length >= 5)
-        // Fuzzy prefix match for transliterations (Colosseum/Colosseo, etc.)
-        || (word.length >= 5 && singularTitle.length >= 5 && singularTitle.slice(0, 5) === singularWord.slice(0, 5));
+    const stemmedWord = stemmer(word);
+    return candidateWords.some((candidateWord) => {
+      const stemmedCandidate = stemmer(candidateWord);
+      if (stemmedCandidate === stemmedWord) return true;
+      if (word.length >= 5 && candidateWord.includes(word)) return true;
+      if (word.length >= 5 && word.includes(candidateWord) && candidateWord.length >= 5) return true;
+      const distance = levenshtein(stemmedWord, stemmedCandidate);
+      return distance <= 2 && distance / Math.max(stemmedWord.length, stemmedCandidate.length) <= 0.25;
     });
   });
   const distinctiveWords = termWords.filter((word) => !genericWords.has(word));
   if (distinctiveWords.length > 0 && !matchedWords.some((word) => distinctiveWords.includes(word))) return 0;
-  return matchedWords.length / termWords.length;
+  if (matchedWords.length === 0) return 0;
+  let score = matchedWords.length / termWords.length;
+  score += (20 - Math.min(originalRankIndex, 20)) * 0.015;
+  const personTags = ['person', 'portrait', 'woman', 'man', 'selfie', 'face'];
+  if (image.tags.some((tag) => personTags.includes(tag.toLowerCase().trim()))) {
+    score *= 0.5;
+  }
+  return score;
 }
 
 // Check if an image URL looks like a real photo based on its dimensions
@@ -266,6 +297,7 @@ async function fetchWikimediaCommonsImage(term: string): Promise<ImageCandidate 
 
     const candidates: { url: string; title: string; score: number; width?: number; height?: number }[] = [];
 
+    let rankIndex = 0;
     for (const pageId in pages) {
       const page = pages[pageId];
       const imageinfo = page?.imageinfo;
@@ -275,10 +307,11 @@ async function fetchWikimediaCommonsImage(term: string): Promise<ImageCandidate 
         const width = imageinfo[0]?.thumbwidth || imageinfo[0]?.width;
         const height = imageinfo[0]?.thumbheight || imageinfo[0]?.height;
         if (url && !isBadImageUrl(url) && hasGoodDimensions(width, height)) {
-          const score = scoreImageRelevance(title, term);
+          const score = scoreImageRelevance({ title: title || '', tags: [] }, term, rankIndex);
           candidates.push({ url, title, score, width, height });
         }
       }
+      rankIndex++;
     }
 
     if (candidates.length === 0) return null;
@@ -382,18 +415,22 @@ async function fetchOpenverseImage(term: string): Promise<ImageCandidate | null>
     // Score each result by relevance and filter out bad images.
     const candidates: { url: string; title: string; score: number; width?: number; height?: number }[] = [];
 
-    for (const result of data.results) {
+    for (let rankIndex = 0; rankIndex < data.results.length; rankIndex++) {
+      const result = data.results[rankIndex];
       const url = result.url;
       const thumb = result.thumbnail;
       const title = result.title || '';
       const width = result.width;
       const height = result.height;
+      const tags = Array.isArray(result.tags)
+        ? result.tags.map((t: any) => (typeof t === 'string' ? t : t?.name || '')).filter(Boolean)
+        : [];
 
       const candidateUrl = url && !isBadImageUrl(url) ? url : (thumb && !isBadImageUrl(thumb) ? thumb : null);
       if (!candidateUrl) continue;
       if (!hasGoodDimensions(width, height)) continue;
 
-      const score = scoreImageRelevance(title, term);
+      const score = scoreImageRelevance({ title, tags }, term, rankIndex);
       candidates.push({ url: candidateUrl, title, score, width, height });
     }
 
@@ -437,11 +474,12 @@ async function fetchPexelsImage(term: string): Promise<ImageCandidate | null> {
     // Score each photo by relevance.
     const candidates: { url: string; alt: string; score: number }[] = [];
 
-    for (const photo of data.photos) {
+    for (let rankIndex = 0; rankIndex < data.photos.length; rankIndex++) {
+      const photo = data.photos[rankIndex];
       const url = photo.src?.large || photo.src?.medium || photo.src?.small || photo.src?.original;
       const alt = photo.alt || '';
       if (url && !isBadImageUrl(url)) {
-        const score = scoreImageRelevance(alt, term);
+        const score = scoreImageRelevance({ title: alt, tags: [] }, term, rankIndex);
         candidates.push({ url, alt, score });
       }
     }

@@ -157,7 +157,7 @@ Dive into anime culture at **Akihabara Electric Town**. Visit **Ueno Park**.
 
 async function main() {
   const badSindhuScore = scoreImageRelevance(
-    'The British Empire in the nineteenth century, its progress and expansion',
+    { title: 'The British Empire in the nineteenth century, its progress and expansion', tags: [] },
     'Sindhu Night Market',
   );
   if (badSindhuScore !== 0) {
