@@ -124,6 +124,11 @@ const MIN_RELEVANCE_SCORE = 0.5;
 const FETCH_TIMEOUT_MS = 5000;
 const imageSearchCache = new Map<string, Promise<string | null>>();
 
+interface ImageCandidate {
+  url: string;
+  score: number;
+}
+
 function isBadImageUrl(url: string | null | undefined): boolean {
   if (!url) return true;
   return BAD_IMAGE_PATTERNS.some(pattern => pattern.test(url));
@@ -247,7 +252,7 @@ function expandImageTerm(term: string): string[] {
   return [...new Set(variants)];
 }
 
-async function fetchWikimediaCommonsImage(term: string): Promise<string | null> {
+async function fetchWikimediaCommonsImage(term: string): Promise<ImageCandidate | null> {
   try {
     const headers = { 'User-Agent': 'flight-deal-dashboard/1.0 (image lookup)' };
     const searchRes = await fetch(
@@ -290,49 +295,9 @@ async function fetchWikimediaCommonsImage(term: string): Promise<string | null> 
     // Only accept if the best candidate has a reasonable relevance score.
     if (candidates[0].score < MIN_RELEVANCE_SCORE) return null;
 
-    return candidates[0].url;
+    return candidates[0];
   } catch (error) {
     console.log('Wikimedia Commons image lookup failed for', term, ':', (error as Error).message);
-    return null;
-  }
-}
-
-// Fallback: use Wikipedia article API to find the lead image for a landmark.
-// This works better for non-English landmark names because Wikipedia articles
-// have redirects from localized names.
-async function fetchWikipediaArticleImage(term: string): Promise<string | null> {
-  try {
-    const headers = { 'User-Agent': 'flight-deal-dashboard/1.0 (image lookup)' };
-    // Search for the Wikipedia article
-    const searchRes = await fetch(
-      `https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(term)}&gsrlimit=3&prop=pageimages|pageimages&piprop=thumbnail&pithumbsize=800&format=json&origin=*`,
-      { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }
-    );
-    if (!searchRes.ok) return null;
-    const data = (await searchRes.json()) as any;
-    const pages = data?.query?.pages;
-    if (!pages) return null;
-
-    // Sort pages by relevance to the search term.
-    const pageList = Object.values(pages) as any[];
-    pageList.sort((a, b) => {
-      const aScore = scoreImageRelevance(a?.title || '', term);
-      const bScore = scoreImageRelevance(b?.title || '', term);
-      return bScore - aScore;
-    });
-
-    for (const page of pageList) {
-      const thumb = page?.thumbnail?.source;
-      const width = page?.thumbnail?.width;
-      const height = page?.thumbnail?.height;
-      if (thumb && !isBadImageUrl(thumb) && hasGoodDimensions(width, height)) {
-        // Check relevance of the article title to the search term.
-        const score = scoreImageRelevance(page?.title || '', term);
-        if (score >= MIN_RELEVANCE_SCORE) return thumb;
-      }
-    }
-    return null;
-  } catch {
     return null;
   }
 }
@@ -347,31 +312,32 @@ export async function getImageForTerm(term: string, fallbackTerms: string[] = []
 }
 
 /**
- * Race all 4 image providers in parallel for a single search term.
- * All fire simultaneously, but results are evaluated in ranked order:
- * Wikimedia > Wikipedia > Openverse > Pexels.
- * This prevents a fast but wrong Pexels result from beating a slow but
- * correct Wikimedia result.
+ * Race all image providers in parallel for a single search term, then pick
+ * the single highest-relevance result across every provider.
  */
 async function raceImageProviders(searchTerm: string): Promise<string | null> {
   const results = await Promise.allSettled([
     fetchWikimediaCommonsImage(searchTerm),
-    fetchWikipediaArticleImage(searchTerm),
     fetchOpenverseImage(searchTerm),
     fetchPexelsImage(searchTerm),
   ]);
 
-  // Evaluate in source-priority order. Each provider already applies its
-  // own relevance threshold, but we also cross-check that the URL itself
-  // plausibly relates to the search term (catches wrong-location images).
-  for (const result of results) {
-    if (result.status === 'fulfilled' && result.value && !isBadImageUrl(result.value)) {
-      if (urlMatchesTerm(result.value, searchTerm)) {
-        return result.value;
+  // Collect the best candidate from each provider, then keep the overall
+  // highest-relevance one. Each provider already applies its own relevance
+  // threshold, but we also cross-check that the URL itself plausibly
+  // relates to the search term (catches wrong-location images).
+  const accepted: { url: string; score: number; priority: number }[] = [];
+  for (let i = 0; i < results.length; i++) {
+    const result = results[i];
+    if (result.status === 'fulfilled' && result.value && !isBadImageUrl(result.value.url)) {
+      if (urlMatchesTerm(result.value.url, searchTerm)) {
+        accepted.push({ url: result.value.url, score: result.value.score, priority: i });
       }
     }
   }
-  return null;
+  if (accepted.length === 0) return null;
+  accepted.sort((a, b) => b.score - a.score || a.priority - b.priority);
+  return accepted[0].url;
 }
 
 async function findImageForTerm(term: string, fallbackTerms: string[] = []): Promise<string | null> {
@@ -386,7 +352,7 @@ async function findImageForTerm(term: string, fallbackTerms: string[] = []): Pro
   const termsToTry = expandImageTerm(cleaned);
   const aliases = knownAliases[cleaned.toLowerCase()] || [];
 
-  // Try each term variant, but race all 4 providers in parallel per term.
+  // Try each term variant, racing all providers in parallel per term.
   for (const t of [...termsToTry, ...aliases, ...fallbackTerms]) {
     const cleanedT = cleanTerm(t);
     if (!cleanedT) continue;
@@ -400,7 +366,7 @@ async function findImageForTerm(term: string, fallbackTerms: string[] = []): Pro
 
 // Source 3: Openverse — free Creative Commons image search (no API key required).
 // Searches millions of CC-licensed images from Flickr, Wikimedia, etc.
-async function fetchOpenverseImage(term: string): Promise<string | null> {
+async function fetchOpenverseImage(term: string): Promise<ImageCandidate | null> {
   try {
     const res = await fetch(
       `https://api.openverse.org/v1/images/?q=${encodeURIComponent(term)}&page_size=10`,
@@ -444,7 +410,7 @@ async function fetchOpenverseImage(term: string): Promise<string | null> {
     // Only accept if the best candidate has a reasonable relevance score.
     if (candidates[0].score < MIN_RELEVANCE_SCORE) return null;
 
-    return candidates[0].url;
+    return candidates[0];
   } catch (error) {
     console.log('Openverse image lookup failed for', term, ':', (error as Error).message);
     return null;
@@ -452,7 +418,7 @@ async function fetchOpenverseImage(term: string): Promise<string | null> {
 }
 
 // Source 4: Pexels — free stock photos (requires PEXELS_API_KEY).
-async function fetchPexelsImage(term: string): Promise<string | null> {
+async function fetchPexelsImage(term: string): Promise<ImageCandidate | null> {
   const apiKey = process.env.PEXELS_API_KEY;
   if (!apiKey || apiKey.includes('your_pexels_api_key')) return null;
 
@@ -488,7 +454,7 @@ async function fetchPexelsImage(term: string): Promise<string | null> {
     // search can return completely unrelated images for niche landmarks.
     if (candidates[0].score < MIN_RELEVANCE_SCORE) return null;
 
-    return candidates[0].url;
+    return candidates[0];
   } catch (error) {
     console.log('Pexels image lookup failed for', term, ':', (error as Error).message);
     return null;
