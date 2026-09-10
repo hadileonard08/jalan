@@ -19,7 +19,7 @@ Users chat with **Jalan**, a friendly travel companion that:
 3. **Generates a full day-by-day itinerary** with:
    - Real weather forecast from Open-Meteo.
    - Live destination news and events (Gemini web search grounding).
-   - High-quality landmark images for each day from 4 image sources (Wikimedia Commons, Wikipedia, Openverse, Pexels) — filtered for relevance and dimensions, deduplicated, with destination image fallback so every day has an image.
+   - High-quality landmark images for each day from 3 image sources (Wikimedia Commons, Openverse, Pexels) — scored for metadata-aware relevance, filtered for dimensions and bad patterns, deduplicated, with destination image fallback so every day has an image.
    - A "Getting Around" section with local transit tips.
    - Per-day transport notes (walking/transit guidance with real times).
 4. **Plans transport between every stop** — a dedicated transport agent geocodes each landmark and uses OSRM to get real walking/driving times, then recommends the best mode (walk, transit, ride-share) per leg, plus city-specific transit tips and cost estimates. Handles generic transit terms (MTR, Subway, JR) intelligently. Includes retry logic for Nominatim rate-limiting on long trips.
@@ -146,21 +146,87 @@ After the itinerary is generated and route links are extracted, a dedicated tran
 
 Processes all days (batched 2 at a time with 1-second delays) to respect Nominatim's 1 req/sec rate limit. Includes retry logic with exponential backoff on HTTP 429, and a fallback geocode query without the city name if the first query returns no results. When geocoding fails, shows a helpful "Take local transit from X to Y" message instead of an error.
 
-### Image hydration
+### Image hydration & relevance scoring
 
-The image agent (`src/agents/destination-images.ts`) tries 4 sources in order for every landmark:
+The image agent (`src/agents/destination-images.ts`) hydrates landmark and destination images before the itinerary reaches the user. Instead of taking the first API result, it queries multiple free image providers in parallel and selects the highest-scoring, most relevant candidate.
 
-1. **Wikimedia Commons** — public domain / CC images
-2. **Wikipedia article lead image** — for famous landmarks (handles non-English names via redirects)
-3. **Openverse** — free, no API key — millions of CC images from Flickr, Wikimedia, Rawpixel, etc.
-4. **Pexels** — free stock photos (optional, requires `PEXELS_API_KEY`)
+#### Image sources
 
-Features:
-- **Quality filtering** — filters out irrelevant, low-quality, or unsuitable images using `BAD_IMAGE_PATTERNS`, `MIN_RELEVANCE_SCORE = 0.3`, and dimension checks. Prioritizes landscape-oriented images.
-- **Deduplication** — tracks used URLs and tries alternative search terms to find unique images per day.
-- **Destination image fallback** — pre-fetches the destination city image and uses it as a last resort so every day always has an image.
-- **Aggressive fallback terms** — for each landmark, tries city + landmark + photo/night/skyline/street/district variants.
-- **Placeholder injection** — if the LLM forgot to include `![IMAGE: ...]` for some days, the agent inserts one using the first bold landmark in that day's block.
+Images are fetched concurrently from:
+
+1. **Wikimedia Commons** — public domain / CC images.
+2. **Openverse** — free CC images from Flickr, Wikimedia, Rawpixel, etc. (no API key).
+3. **Pexels** — free stock photos (optional, requires `PEXELS_API_KEY`).
+
+Wikipedia article-image lookup was removed because it could return less reliable results; the remaining providers are raced in parallel and the best valid candidate is chosen by score, with provider order used for ties.
+
+#### Relevance scoring (`scoreImageRelevance`)
+
+Each candidate is evaluated with `scoreImageRelevance(imageMetadata, term, originalRankIndex)`:
+
+- `imageMetadata` is `{ title: string; tags: string[] }`.
+- `term` is the normalized landmark or city name to match.
+- `originalRankIndex` is the provider's 0-based result position, used to break ties.
+
+The scorer builds a combined, deduplicated word set from both the image title and all tags, normalizes and stems every word, and then matches each term word to the candidate word set.
+
+A term word and a candidate word are considered a match if one of the following is true, in order:
+
+1. **Stem equality** (Porter stemming) — e.g. `gallery` matches `galleries`.
+2. **Exact string equality** — e.g. `paris` matches `paris`.
+3. **Long-word substring** — one word contains the other and both are ≥ 5 characters — e.g. `senso` is contained in `sensoji`.
+4. **Levenshtein distance with a strict guard** — the edit distance is ≤ 2 **and** the ratio of the edit distance to the length of the longer word is ≤ 25%. This lets `colosseum` match `colosseo` (distance 2, 2/9 ≈ 22%) while correctly rejecting `austin` ↔ `austria` (distance 2, 2/7 ≈ 29%).
+
+##### Scoring formula
+
+For every term word that has a matching candidate word, the score is computed as the sum of per-word scores, normalized by the number of term words:
+
+- **Base match value:** `1.0` for stem / exact / substring matches, `0.8` for Levenshtein matches.
+- **Long-word bonus:** `+0.2` if the matched candidate word is ≥ 5 characters (landmarks are more distinctive than 3–4 letter words).
+- **Provider-rank bonus:** `+ ((20 - min(originalRankIndex, 20)) * 0.015)` — earlier API results get a small tie-break boost, capped at rank 20.
+- **Generic-word penalty:** if the term contains distinctive (non-generic) words but only generic words (`city`, `park`, `street`, `market`, `view`, `square`, `bridge`, `river`, `hill`, `island`, etc.) matched, the score is forced to `0`.
+- **Minimum threshold:** candidates below `MIN_RELEVANCE_SCORE = 0.5` are rejected.
+
+##### Safeguards and penalties
+
+- **Sports-venue / cultural mismatch gate** — if the search term contains a cultural or religious word such as `shrine`, `temple`, `palace`, `garden`, `mosque`, `cathedral`, or `pagoda`, any candidate title or tags containing sports-venue terms (`stadium`, `baseball`, `arena`, `football`, `soccer`, `court`, `field`) is rejected with score `0`. This prevents, for example, a baseball-stadium photo being selected for Meiji Jingu Shrine.
+- **Person / portrait penalty** — if the tags contain `person`, `portrait`, `woman`, `man`, `selfie`, or `face`, the final score is multiplied by `0.5` to prefer architectural and landscape shots over portraits.
+- **Bad-pattern filtering** — before scoring, images are rejected if their title, tags, or URL contain obvious non-photos: `flag`, `emblem`, `logo`, `icon`, `seal`, `map`, `diagram`, `chart`, `graph`, `infographic`, `sign`, `plaque`, `statue` (for people), `pdf`, or `svg`.
+- **Dimension & orientation checks** — very small, extremely tall/narrow, or oversized images are filtered. Landscape-oriented images are preferred over portrait.
+- **URL cross-validation** — the image URL must contain at least one distinctive word from the term, which catches mismatched filenames (e.g. a URL containing `tamsui` for a `monkey forest` search).
+- **Deduplication** — used image URLs are tracked across days, and the agent falls back to destination/city images and alternative term variants if a unique shot cannot be found.
+- **Destination image fallback** — a city-level image is pre-fetched so every day has a valid image even when a specific landmark photo cannot be located.
+
+#### Performance notes
+
+- Provider calls run in parallel (`Promise.allSettled`) and are limited to 3 term variants per landmark (base, stripped suffix, `photo`) instead of the older ~12-variant list, cutting API calls by roughly 75%.
+- Every external fetch uses a 5-second timeout (`AbortSignal.timeout(5000)`).
+- Images and transport run concurrently in the post-Critic enrichment stage via `Promise.all()`.
+- The core itinerary is streamed to the frontend before enrichment, so users see useful content sooner.
+
+#### Testing image scoring
+
+Run the deterministic scorer tests without consuming Gemini tokens or starting a server:
+
+```bash
+npx tsx scripts/test-image-scoring.ts
+```
+
+Covered assertions:
+
+- `Colosseum` matches `Colosseo` (Levenshtein).
+- `Senso-ji Temple` matches `Sensoji` (substring).
+- `Uffizi Gallery` matches `Uffizi Galleries` (Porter stemming).
+- `Austin` does **not** match `Austria` (length-normalized Levenshtein guard).
+- Tags with `person`/`portrait`/`woman`/`man`/`selfie`/`face` halve the score.
+- A stadium image is rejected for a shrine term (mismatch gate).
+
+Run the full image spot tests for one or more landmarks:
+
+```bash
+npx tsx scripts/test-images.ts
+npx tsx scripts/test-images.ts --landmarks "Colosseum" "Uffizi Gallery" "Meiji Jingu Shrine" "Senso-ji Temple"
+```
 
 ### Live deal search (Seats.aero)
 
@@ -229,7 +295,7 @@ A sign-in-gated, centered modal accessible from the left sidebar that lets users
 - **Flight deals**: Seats.aero Partner API (live search + trip details)
 - **Transport routing**: OSRM (free walking/driving times) + Nominatim (geocoding)
 - **Weather**: Open-Meteo (forecast + long-range climate projections)
-- **Images**: Wikimedia Commons + Wikipedia + Openverse + Pexels (optional, 4 sources, deduplicated)
+- **Images**: Wikimedia Commons + Openverse + Pexels (optional, 3 sources), with metadata-aware relevance scoring and destination fallback
 - **News**: Google Gemini web search grounding
 - **Date parsing**: chrono-node
 - **Database**: PostgreSQL + Drizzle ORM (for cached deals and conversation history)
@@ -333,7 +399,7 @@ A sign-in-gated, centered modal accessible from the left sidebar that lets users
 - **Nominatim / OpenStreetMap** — geocoding of landmark names to coordinates (free, no API key).
 - **Open-Meteo** — destination weather forecast + long-range climate projections.
 - **Wikimedia Commons** — public domain / CC landmark images (deduplicated).
-- **Wikipedia** — landmark verification + article lead images (handles non-English names).
+- **Wikipedia** — landmark verification via search API; article lead images are no longer used as an image source.
 - **Openverse** — free CC images from Flickr, Wikimedia, Rawpixel, etc. (no API key).
 - **Pexels** — free stock photos (optional, requires `PEXELS_API_KEY`).
 - **Google Maps** — daily route directions links (no API key required, uses public URL format).
@@ -350,7 +416,7 @@ src/
     conversation-graph.ts    # LangGraph state machine (extract → gather → generate → guardrails → RAG critic → respond)
     itinerary-guardrails.ts  # Wikipedia landmark verification + Google Maps route link builder
     transport.ts             # Transport agent: OSRM routing + Nominatim geocoding + LLM transit tips
-    destination-images.ts    # Image hydration: Wikimedia + Wikipedia + Openverse + Pexels (deduplicated)
+    destination-images.ts    # Image hydration: Wikimedia + Openverse + Pexels, with metadata-aware relevance scoring
     weather.ts               # Open-Meteo forecast + climate projections
     news-search.ts           # Destination news search (Gemini web search grounding)
     graph.ts                 # Itinerary graph for deal modal (architect → critic)
@@ -447,8 +513,9 @@ scripts/
 9. **Run local image tests** (without consuming Gemini tokens):
    ```bash
    npx tsx scripts/test-images.ts
+   npx tsx scripts/test-image-scoring.ts
    ```
-   Tests image fetching from all 4 sources (Wikimedia, Wikipedia, Openverse, Pexels) with quality filtering and deduplication.
+   `test-images.ts` fetches images from the 3 providers and validates quality. `test-image-scoring.ts` runs deterministic assertions for stemming, Levenshtein, portrait penalties, and the sports/cultural mismatch gate.
 
 ---
 
@@ -462,7 +529,7 @@ scripts/
 - Added a typed **RAG Triad LLM-as-a-judge pipeline** that scores Context Relevance, Groundedness, and Answer Relevance, requires 4/5 on the two user-facing quality metrics, and regenerates drafts using evaluator reasoning without repeating external retrieval.
 - Added **hallucination and date guardrails** that verify landmarks against Wikipedia, reject past travel dates and stale calendar events, and enforce exact inclusive trip duration.
 - Implemented **daily Google Maps route links** with highlight summaries by extracting landmarks from the itinerary and building clickable directions URLs — no API key required.
-- Built a **4-source image hydration agent** (Wikimedia Commons, Wikipedia, Openverse, Pexels) with quality filtering (relevance score, dimensions, bad pattern detection), deduplication, and destination image fallback so every day always has a high-quality landscape image.
+- Built a **3-source image hydration agent** (Wikimedia Commons, Openverse, Pexels) with metadata-aware relevance scoring (Porter stemming, length-normalized Levenshtein distance, title + tag cross-validation), bad-pattern detection, dimension checks, deduplication, and destination image fallback so every day always has a high-quality landscape image.
 - Added a **30-day duration guardrail** that caps absurd requests (e.g. "2 years") at 30 days, enforced in 3 places (extract, generate, prompt).
 - Supports **70+ global destinations** with country-to-airport-code mapping for deal searches, and fallback to city name for weather, news, and images when IATA codes aren't in the lookup tables.
 - Built a **share trip link feature** — generates public, read-only shareable URLs (stored server-side in PostgreSQL, never expire) that display the full itinerary with all payload sections and a section navigator.
