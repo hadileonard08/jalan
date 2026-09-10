@@ -376,19 +376,6 @@ async function buildDayTransport(
     ]);
     const routeDistance = walkResult?.distanceKm ?? drive?.distanceKm ?? null;
 
-    // Append the OSRM geometry to the day's polyline, preferring the driving shape.
-    const legPolyline = drive?.coordinates?.length
-      ? drive.coordinates
-      : (walkResult?.coordinates?.length ? walkResult.coordinates : null);
-    if (legPolyline) {
-      if (i === 0) {
-        dayPolyline.push(...legPolyline);
-      } else {
-        // Avoid duplicating the shared waypoint between consecutive legs.
-        dayPolyline.push(...legPolyline.slice(1));
-      }
-    }
-
     if (routeDistance !== null && routeDistance > 100) {
       legs.push({
         from: fromName,
@@ -410,6 +397,25 @@ async function buildDayTransport(
       drive?.durationMin ?? null,
       routeDistance
     );
+
+    // Choose the geometry that matches the recommended mode: walking shape
+    // for walkable legs, driving shape for transit/taxi legs. Falls back to
+    // whichever geometry is available.
+    const isWalkingMode = mode.includes('Walk');
+    const preferredGeometry = isWalkingMode
+      ? (walk?.coordinates?.length ? walk.coordinates : null)
+      : (drive?.coordinates?.length ? drive.coordinates : null);
+    const legPolyline = preferredGeometry
+      ?? (drive?.coordinates?.length ? drive.coordinates : null)
+      ?? (walkResult?.coordinates?.length ? walkResult.coordinates : null);
+    if (legPolyline) {
+      if (i === 0) {
+        dayPolyline.push(...legPolyline);
+      } else {
+        // Avoid duplicating the shared waypoint between consecutive legs.
+        dayPolyline.push(...legPolyline.slice(1));
+      }
+    }
 
     legs.push({
       from: fromName,
