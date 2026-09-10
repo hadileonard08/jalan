@@ -85,7 +85,8 @@ You are also a detail extractor. Read the conversation and figure out the user's
 Today is ${new Date().toISOString().split('T')[0]}.
 
 Instructions:
-- If the user gives a month or date without a year, resolve it to the next occurrence that is today or later. Never infer a past year.
+- If the user gives a month or date WITHOUT a year, resolve it to the next occurrence that is today or later.
+- If the user gives an EXPLICIT year (e.g. "October 1, 2023"), preserve that year exactly as written. Do NOT silently change a past year to a future year — the system will reject past dates separately.
 - Use the conversation history for context. If the user is answering a previous clarifying question, combine it with earlier messages.
 - Required: destination, and either a specific startDate OR a general/relative date expression (e.g. "October", "in two weeks", "flexible", "2 week trip").
 - If the user only gives a duration ("2 week trip") or a rough window without an exact date, set durationDays and datesGeneral, and leave startDate null.
@@ -141,6 +142,30 @@ User: ${state.userMessage}
     if (parsed.startDate) entities.startDate = parsed.startDate;
     if (parsed.endDate) entities.endDate = parsed.endDate;
     if (parsed.durationDays) entities.durationDays = parsed.durationDays;
+  }
+
+  // Deterministic past-date recovery: if the user's message contains explicit
+  // dates with years (e.g. "October 1, 2025"), parse them with chrono. If the
+  // LLM silently "corrected" a past year to a future year, restore the actual
+  // past dates so the guardrail (getTravelDateValidationError) fires correctly.
+  const explicitDateParse = chrono.parse(state.userMessage, new Date(), { forwardDate: false });
+  if (explicitDateParse.length > 0) {
+    const explicitStart = explicitDateParse[0].start.date();
+    const explicitEnd = explicitDateParse[0].end?.date();
+    const today = new Date(Date.UTC(
+      new Date().getUTCFullYear(),
+      new Date().getUTCMonth(),
+      new Date().getUTCDate(),
+    ));
+    // Only override if the explicitly parsed date is in the past AND the user's
+    // message contained a 4-digit year (so we don't catch "October" alone).
+    const hasExplicitYear = /\b(?:19|20)\d{2}\b/.test(state.userMessage);
+    if (hasExplicitYear && explicitStart < today) {
+      entities.startDate = explicitStart.toISOString().split('T')[0];
+      if (explicitEnd) {
+        entities.endDate = explicitEnd.toISOString().split('T')[0];
+      }
+    }
   }
 
   // Try parsing the raw user message for dates/duration as a fallback
