@@ -47,6 +47,17 @@ class BatchIngestRequest(BaseModel):
     items: List[BatchIngestItem] = Field(..., min_length=1, max_length=16)
 
 
+class RankRequest(BaseModel):
+    search_term: str = Field(..., min_length=1)
+    image_urls: List[HttpUrl] = Field(..., min_length=1, max_length=20)
+    limit: int = Field(1, ge=1, le=20)
+
+
+class RankResult(BaseModel):
+    image_url: str
+    similarity_score: float
+
+
 def vector_to_db_str(vector: np.ndarray) -> str:
     """Convert a 1-D float vector into pgvector text representation."""
     flat = np.asarray(vector, dtype=float).flatten()
@@ -216,6 +227,42 @@ def _ingest_batch(image_urls: List[str], location_names: List[str]) -> dict:
     return {"ingested": len(valid_urls), "failed": len(image_urls) - len(valid_urls)}
 
 
+def _rank_images(search_term: str, image_urls: List[str], limit: int) -> List[RankResult]:
+    """Download candidate images and rank them by CLIP cosine similarity to the text."""
+    if model is None:
+        raise RuntimeError("Model is not loaded")
+
+    images: List[Image.Image] = []
+    valid_urls: List[str] = []
+
+    for url in image_urls:
+        try:
+            img = _download_image(url)
+            images.append(img)
+            valid_urls.append(url)
+        except Exception as exc:
+            logger.warning("Skipping rank image %s: %s", url, exc)
+
+    if not images:
+        return []
+
+    # Encode text and images as normalized unit vectors so dot product = cosine similarity.
+    text_vector = model.encode(search_term, normalize_embeddings=True, show_progress_bar=False)
+    image_vectors = model.encode(images, normalize_embeddings=True, show_progress_bar=False)
+
+    # Cosine similarity is the dot product because vectors are normalized.
+    similarities = np.dot(image_vectors, text_vector)
+    top_indices = np.argsort(similarities)[::-1][:limit]
+
+    return [
+        RankResult(
+            image_url=valid_urls[i],
+            similarity_score=float(np.clip(similarities[i], 0.0, 1.0)),
+        )
+        for i in top_indices
+    ]
+
+
 def _search_images(vector: np.ndarray, limit: int) -> List[SearchResult]:
     """Return the nearest images for a text vector using cosine distance."""
     vector_str = vector_to_db_str(vector)
@@ -297,6 +344,16 @@ async def batch_ingest(request: BatchIngestRequest):
         "ingested": result["ingested"],
         "failed": result["failed"],
     }
+
+
+@app.post("/rank", response_model=List[RankResult])
+async def rank(request: RankRequest):
+    """Rank a list of image URLs by how visually similar they are to a text query."""
+    image_urls = [str(url) for url in request.image_urls]
+    results = await anyio.to_thread.run_sync(
+        _rank_images, request.search_term, image_urls, request.limit
+    )
+    return results
 
 
 @app.post("/search", response_model=List[SearchResult])

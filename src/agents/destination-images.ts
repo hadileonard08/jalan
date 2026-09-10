@@ -125,11 +125,19 @@ const MIN_RELEVANCE_SCORE = 0.5;
 const FETCH_TIMEOUT_MS = 5000;
 const VECTOR_IMAGE_SERVICE_URL = process.env.IMAGE_SEARCH_SERVICE_URL;
 const VECTOR_IMAGE_MIN_SCORE = parseFloat(process.env.VECTOR_IMAGE_MIN_SCORE || '0.15');
+const RANK_TIMEOUT_MS = 30000; // downloading + encoding several images takes longer
+const RANK_MIN_SCORE = parseFloat(process.env.VECTOR_IMAGE_MIN_SCORE || '0.22');
+const RANK_CANDIDATES_PER_PROVIDER = 3;
+const RANK_MAX_CANDIDATES = 9;
 const imageSearchCache = new Map<string, Promise<string | null>>();
 
 interface ImageCandidate {
   url: string;
   score: number;
+  title?: string;
+  alt?: string;
+  width?: number;
+  height?: number;
 }
 
 export interface ImageMetadata {
@@ -285,19 +293,19 @@ function expandImageTerm(term: string): string[] {
   return [...new Set(variants)];
 }
 
-async function fetchWikimediaCommonsImage(term: string): Promise<ImageCandidate | null> {
+async function fetchWikimediaCommonsImages(term: string, maxResults = RANK_CANDIDATES_PER_PROVIDER): Promise<ImageCandidate[]> {
   try {
     const headers = { 'User-Agent': 'flight-deal-dashboard/1.0 (image lookup)' };
     const searchRes = await fetch(
-      `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(term)}&gsrnamespace=6&gsrlimit=8&prop=imageinfo&iiprop=url|thumb|size&iiurlwidth=800&format=json&origin=*`,
+      `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(term)}&gsrnamespace=6&gsrlimit=12&prop=imageinfo&iiprop=url|thumb|size&iiurlwidth=800&format=json&origin=*`,
       { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }
     );
-    if (!searchRes.ok) return null;
+    if (!searchRes.ok) return [];
     const data = (await searchRes.json()) as any;
     const pages = data?.query?.pages;
-    if (!pages) return null;
+    if (!pages) return [];
 
-    const candidates: { url: string; title: string; score: number; width?: number; height?: number }[] = [];
+    const candidates: ImageCandidate[] = [];
 
     let rankIndex = 0;
     for (const pageId in pages) {
@@ -310,30 +318,26 @@ async function fetchWikimediaCommonsImage(term: string): Promise<ImageCandidate 
         const height = imageinfo[0]?.thumbheight || imageinfo[0]?.height;
         if (url && !isBadImageUrl(url) && hasGoodDimensions(width, height)) {
           const score = scoreImageRelevance({ title: title || '', tags: [] }, term, rankIndex);
-          candidates.push({ url, title, score, width, height });
+          candidates.push({ url, title: title || '', score, width, height });
         }
       }
       rankIndex++;
     }
 
-    if (candidates.length === 0) return null;
+    if (candidates.length === 0) return [];
 
     // Sort by relevance score, then prefer landscape orientation.
     candidates.sort((a, b) => {
       if (b.score !== a.score) return b.score - a.score;
-      // Prefer landscape (width > height) for better display.
       const aLandscape = (a.width || 0) > (a.height || 0) ? 1 : 0;
       const bLandscape = (b.width || 0) > (b.height || 0) ? 1 : 0;
       return bLandscape - aLandscape;
     });
 
-    // Only accept if the best candidate has a reasonable relevance score.
-    if (candidates[0].score < MIN_RELEVANCE_SCORE) return null;
-
-    return candidates[0];
+    return candidates.slice(0, maxResults);
   } catch (error) {
     console.log('Wikimedia Commons image lookup failed for', term, ':', (error as Error).message);
-    return null;
+    return [];
   }
 }
 
@@ -346,33 +350,73 @@ export async function getImageForTerm(term: string, fallbackTerms: string[] = []
   return lookup;
 }
 
+async function rankImagesWithVector(term: string, candidates: ImageCandidate[]): Promise<string | null> {
+  if (!VECTOR_IMAGE_SERVICE_URL || candidates.length === 0) return null;
+  try {
+    const urls = candidates.slice(0, RANK_MAX_CANDIDATES).map(c => c.url);
+    const res = await fetch(`${VECTOR_IMAGE_SERVICE_URL}/rank`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ search_term: term, image_urls: urls, limit: 1 }),
+      signal: AbortSignal.timeout(RANK_TIMEOUT_MS),
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { image_url: string; similarity_score: number }[];
+    if (!Array.isArray(data) || data.length === 0) return null;
+    const best = data[0];
+    if (best.similarity_score >= RANK_MIN_SCORE && !isBadImageUrl(best.image_url)) {
+      return best.image_url;
+    }
+    return null;
+  } catch (error) {
+    console.log('Vector image ranking failed for', term, ':', (error as Error).message);
+    return null;
+  }
+}
+
 /**
- * Race all image providers in parallel for a single search term, then pick
- * the single highest-relevance result across every provider.
+ * Collect candidate images from all providers, then use CLIP to rank them by
+ * visual/semantic similarity to the search term. Falls back to lexical scoring
+ * if the vector service is unavailable or no candidate reaches the threshold.
  */
-async function raceImageProviders(searchTerm: string): Promise<string | null> {
+async function collectAndRankImages(searchTerm: string, useVector = true): Promise<string | null> {
   const results = await Promise.allSettled([
-    fetchWikimediaCommonsImage(searchTerm),
-    fetchOpenverseImage(searchTerm),
-    fetchPexelsImage(searchTerm),
+    fetchWikimediaCommonsImages(searchTerm),
+    fetchOpenverseImages(searchTerm),
+    fetchPexelsImages(searchTerm),
   ]);
 
-  // Collect the best candidate from each provider, then keep the overall
-  // highest-relevance one. Each provider already applies its own relevance
-  // threshold, but we also cross-check that the URL itself plausibly
-  // relates to the search term (catches wrong-location images).
-  const accepted: { url: string; score: number; priority: number }[] = [];
-  for (let i = 0; i < results.length; i++) {
-    const result = results[i];
-    if (result.status === 'fulfilled' && result.value && !isBadImageUrl(result.value.url)) {
-      if (urlMatchesTerm(result.value.url, searchTerm)) {
-        accepted.push({ url: result.value.url, score: result.value.score, priority: i });
+  const seen = new Set<string>();
+  const candidates: ImageCandidate[] = [];
+  for (const result of results) {
+    if (result.status === 'fulfilled' && result.value) {
+      for (const c of result.value) {
+        if (!isBadImageUrl(c.url) && hasGoodDimensions(c.width, c.height) && !seen.has(c.url)) {
+          seen.add(c.url);
+          candidates.push(c);
+        }
       }
     }
   }
-  if (accepted.length === 0) return null;
-  accepted.sort((a, b) => b.score - a.score || a.priority - b.priority);
-  return accepted[0].url;
+
+  if (candidates.length === 0) return null;
+
+  // Prefer CLIP visual ranking when available.
+  if (useVector && VECTOR_IMAGE_SERVICE_URL) {
+    const rankedUrl = await rankImagesWithVector(searchTerm, candidates);
+    if (rankedUrl) return rankedUrl;
+  }
+
+  // Fallback: lexical scoring + URL cross-check.
+  const accepted = candidates
+    .filter(c => urlMatchesTerm(c.url, searchTerm) && c.score >= MIN_RELEVANCE_SCORE)
+    .sort((a, b) => b.score - a.score);
+  if (accepted.length > 0) return accepted[0].url;
+
+  // Last resort: even a marginal candidate is better than nothing if it's not a bad URL.
+  candidates.sort((a, b) => b.score - a.score);
+  const best = candidates.find(c => !isBadImageUrl(c.url));
+  return best?.url || null;
 }
 
 function locationMatchesTerm(location: string, term: string): boolean {
@@ -448,12 +492,13 @@ export async function findImageForTerm(
   const termsToTry = expandImageTerm(cleaned);
   const aliases = knownAliases[cleaned.toLowerCase()] || [];
 
-  // Try each term variant, racing all providers in parallel per term.
+  // Try each term variant, collecting candidates from all providers and ranking
+  // them with CLIP when the vector service is configured.
   for (const t of [...termsToTry, ...aliases, ...fallbackTerms]) {
     const cleanedT = cleanTerm(t);
     if (!cleanedT) continue;
 
-    const url = await raceImageProviders(cleanedT);
+    const url = await collectAndRankImages(cleanedT, useVector);
     if (url) return url;
   }
 
@@ -462,21 +507,20 @@ export async function findImageForTerm(
 
 // Source 3: Openverse — free Creative Commons image search (no API key required).
 // Searches millions of CC-licensed images from Flickr, Wikimedia, etc.
-async function fetchOpenverseImage(term: string): Promise<ImageCandidate | null> {
+async function fetchOpenverseImages(term: string, maxResults = RANK_CANDIDATES_PER_PROVIDER): Promise<ImageCandidate[]> {
   try {
     const res = await fetch(
-      `https://api.openverse.org/v1/images/?q=${encodeURIComponent(term)}&page_size=10`,
+      `https://api.openverse.org/v1/images/?q=${encodeURIComponent(term)}&page_size=12`,
       {
         headers: { 'User-Agent': 'flight-deal-dashboard/1.0 (image lookup)' },
         signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       }
     );
-    if (!res.ok) return null;
+    if (!res.ok) return [];
     const data = (await res.json()) as any;
-    if (!data?.results || data.results.length === 0) return null;
+    if (!data?.results || data.results.length === 0) return [];
 
-    // Score each result by relevance and filter out bad images.
-    const candidates: { url: string; title: string; score: number; width?: number; height?: number }[] = [];
+    const candidates: ImageCandidate[] = [];
 
     for (let rankIndex = 0; rankIndex < data.results.length; rankIndex++) {
       const result = data.results[rankIndex];
@@ -497,7 +541,7 @@ async function fetchOpenverseImage(term: string): Promise<ImageCandidate | null>
       candidates.push({ url: candidateUrl, title, score, width, height });
     }
 
-    if (candidates.length === 0) return null;
+    if (candidates.length === 0) return [];
 
     // Sort by relevance, then prefer landscape.
     candidates.sort((a, b) => {
@@ -507,58 +551,51 @@ async function fetchOpenverseImage(term: string): Promise<ImageCandidate | null>
       return bLandscape - aLandscape;
     });
 
-    // Only accept if the best candidate has a reasonable relevance score.
-    if (candidates[0].score < MIN_RELEVANCE_SCORE) return null;
-
-    return candidates[0];
+    return candidates.slice(0, maxResults);
   } catch (error) {
     console.log('Openverse image lookup failed for', term, ':', (error as Error).message);
-    return null;
+    return [];
   }
 }
 
 // Source 4: Pexels — free stock photos (requires PEXELS_API_KEY).
-async function fetchPexelsImage(term: string): Promise<ImageCandidate | null> {
+async function fetchPexelsImages(term: string, maxResults = RANK_CANDIDATES_PER_PROVIDER): Promise<ImageCandidate[]> {
   const apiKey = process.env.PEXELS_API_KEY;
-  if (!apiKey || apiKey.includes('your_pexels_api_key')) return null;
+  if (!apiKey || apiKey.includes('your_pexels_api_key')) return [];
 
   try {
     const res = await fetch(
-      `https://api.pexels.com/v1/search?query=${encodeURIComponent(term)}&per_page=10&orientation=landscape`,
+      `https://api.pexels.com/v1/search?query=${encodeURIComponent(term)}&per_page=12&orientation=landscape`,
       {
         headers: { Authorization: apiKey },
         signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       }
     );
-    if (!res.ok) return null;
+    if (!res.ok) return [];
     const data = (await res.json()) as any;
-    if (!data?.photos || data.photos.length === 0) return null;
+    if (!data?.photos || data.photos.length === 0) return [];
 
-    // Score each photo by relevance.
-    const candidates: { url: string; alt: string; score: number }[] = [];
+    const candidates: ImageCandidate[] = [];
 
     for (let rankIndex = 0; rankIndex < data.photos.length; rankIndex++) {
       const photo = data.photos[rankIndex];
       const url = photo.src?.large || photo.src?.medium || photo.src?.small || photo.src?.original;
       const alt = photo.alt || '';
-      if (url && !isBadImageUrl(url)) {
+      const width = photo.width;
+      const height = photo.height;
+      if (url && !isBadImageUrl(url) && hasGoodDimensions(width, height)) {
         const score = scoreImageRelevance({ title: alt, tags: [] }, term, rankIndex);
-        candidates.push({ url, alt, score });
+        candidates.push({ url, alt, score, width, height });
       }
     }
 
-    if (candidates.length === 0) return null;
+    if (candidates.length === 0) return [];
 
     candidates.sort((a, b) => b.score - a.score);
-
-    // Require a minimum relevance score even for Pexels — stock photo
-    // search can return completely unrelated images for niche landmarks.
-    if (candidates[0].score < MIN_RELEVANCE_SCORE) return null;
-
-    return candidates[0];
+    return candidates.slice(0, maxResults);
   } catch (error) {
     console.log('Pexels image lookup failed for', term, ':', (error as Error).message);
-    return null;
+    return [];
   }
 }
 
