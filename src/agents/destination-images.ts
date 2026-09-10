@@ -375,6 +375,30 @@ async function raceImageProviders(searchTerm: string): Promise<string | null> {
   return accepted[0].url;
 }
 
+function locationMatchesTerm(location: string, term: string): boolean {
+  if (!location || !term) return false;
+  const normalize = (s: string) =>
+    s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9\s]/g, ' ');
+  const termWords = normalize(term).split(/\s+/).filter(Boolean).filter(w => w.length >= 4);
+  const locationWords = normalize(location).split(/\s+/).filter(Boolean).filter(w => w.length >= 4);
+
+  const genericWords = new Set([
+    'city', 'skyline', 'landmark', 'temple', 'market', 'night', 'beach',
+    'park', 'street', 'bridge', 'palace', 'garden', 'building', 'museum',
+  ]);
+
+  // Require at least one distinctive (non-generic) word from the query to appear
+  // in the stored location_name. This prevents generic matches like a random
+  // "temple" in Busan from satisfying "Senso-ji Temple".
+  const distinctive = termWords.filter(w => !genericWords.has(w));
+  if (distinctive.length > 0) {
+    return distinctive.some(w => locationWords.includes(w));
+  }
+
+  // If the whole term is generic (e.g. "Tokyo skyline"), any shared generic word is fine.
+  return termWords.some(w => locationWords.includes(w));
+}
+
 async function getVectorImage(term: string): Promise<string | null> {
   if (!VECTOR_IMAGE_SERVICE_URL) return null;
   try {
@@ -389,9 +413,11 @@ async function getVectorImage(term: string): Promise<string | null> {
     if (!Array.isArray(data) || data.length === 0) return null;
     for (const result of data) {
       const url = result?.image_url;
+      const location = result?.location_name;
       const score = Number(result?.similarity_score);
       if (!url || Number.isNaN(score) || score < VECTOR_IMAGE_MIN_SCORE) continue;
       if (isBadImageUrl(url)) continue;
+      if (!locationMatchesTerm(location, term)) continue;
       return url;
     }
     return null;
