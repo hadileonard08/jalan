@@ -100,6 +100,9 @@ export const savedTrips = pgTable('saved_trips', {
   payload: text('payload').notNull(), // JSON: full ChatPayload
   todos: text('todos').notNull().default('[]'), // JSON: [{ id, text, done }]
   notes: text('notes').notNull().default(''),
+  feedback: text('feedback').notNull().default('{}'), // JSON: Record<stopName, StopFeedback>
+  flightInfo: text('flight_info').notNull().default('[]'), // JSON: ManualFlightEntry[]
+  documents: text('documents').notNull().default('[]'), // JSON: UploadedDocument[]
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (table) => ({

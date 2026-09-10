@@ -29,6 +29,9 @@ export async function GET() {
       payload: JSON.parse(t.payload),
       todos: JSON.parse(t.todos),
       notes: t.notes,
+      feedback: JSON.parse(t.feedback || '{}'),
+      flightInfo: JSON.parse(t.flightInfo || '[]'),
+      documents: JSON.parse(t.documents || '[]'),
       savedAt: t.createdAt.toISOString(),
     }));
 
@@ -65,6 +68,9 @@ export async function POST(req: NextRequest) {
         payload: JSON.stringify(payload),
         todos: '[]',
         notes: '',
+        feedback: '{}',
+        flightInfo: '[]',
+        documents: '[]',
       })
       .returning();
 
@@ -77,6 +83,9 @@ export async function POST(req: NextRequest) {
         payload: JSON.parse(trip.payload),
         todos: JSON.parse(trip.todos),
         notes: trip.notes,
+        feedback: JSON.parse(trip.feedback || '{}'),
+        flightInfo: JSON.parse(trip.flightInfo || '[]'),
+        documents: JSON.parse(trip.documents || '[]'),
         savedAt: trip.createdAt.toISOString(),
       },
     });

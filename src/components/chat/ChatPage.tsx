@@ -713,6 +713,9 @@ export default function ChatPage() {
       payload,
       todos: [],
       notes: '',
+      feedback: {},
+      flightInfo: [],
+      documents: [],
       savedAt: new Date().toISOString(),
     };
     setSavedTrips((prev) => [newTrip, ...prev]);

@@ -6,8 +6,8 @@ import { eq, and } from 'drizzle-orm';
 
 export const dynamic = 'force-dynamic';
 
-// PATCH /api/saved-trips/[id] — update todos or notes for a saved trip.
-// Body: { todos?: [...], notes?: string }
+// PATCH /api/saved-trips/[id] — update a saved trip.
+// Body: { todos?, notes?, feedback?, flightInfo?, documents? }
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const userId = auth().userId;
@@ -16,12 +16,15 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     }
 
     const body = await req.json();
-    const { todos, notes } = body;
+    const { todos, notes, feedback, flightInfo, documents } = body;
 
     // Build the update object — only update fields that were provided.
     const updates: Record<string, any> = { updatedAt: new Date() };
     if (todos !== undefined) updates.todos = JSON.stringify(todos);
     if (notes !== undefined) updates.notes = notes;
+    if (feedback !== undefined) updates.feedback = JSON.stringify(feedback);
+    if (flightInfo !== undefined) updates.flightInfo = JSON.stringify(flightInfo);
+    if (documents !== undefined) updates.documents = JSON.stringify(documents);
 
     const [updated] = await db
       .update(savedTrips)
@@ -42,6 +45,9 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
         payload: JSON.parse(updated.payload),
         todos: JSON.parse(updated.todos),
         notes: updated.notes,
+        feedback: JSON.parse(updated.feedback || '{}'),
+        flightInfo: JSON.parse(updated.flightInfo || '[]'),
+        documents: JSON.parse(updated.documents || '[]'),
         savedAt: updated.createdAt.toISOString(),
       },
     });

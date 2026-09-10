@@ -74,6 +74,47 @@ export interface ChatMessageUI {
   isStreaming?: boolean;
 }
 
+// Per-stop collaboration feedback for saved trips.
+export interface StopComment {
+  id: string;
+  author: string;
+  text: string;
+  createdAt: string;
+}
+
+export interface StopFeedback {
+  stopId: string;
+  thumbsUp: number;
+  thumbsDown: number;
+  userVote?: 'up' | 'down' | null;
+  comments: StopComment[];
+}
+
+// Manual flight/hotel/document entry for the Flights & Docs tab.
+export interface ManualFlightEntry {
+  id: string;
+  type: 'flight' | 'hotel' | 'train' | 'car' | 'other';
+  label: string;          // e.g. "Outbound Flight", "Hotel in Paris"
+  airlineOrProvider: string; // e.g. "JAL", "Marriott"
+  confirmationCode: string; // PNR / booking ref
+  departureTime?: string;    // ISO datetime
+  arrivalTime?: string;      // ISO datetime
+  notes?: string;
+  createdAt: string;
+}
+
+// Uploaded document (PDF e-ticket, hotel voucher, etc.).
+// Stored as a base64 data URL so it round-trips through the JSON payload
+// without needing a separate file storage service.
+export interface UploadedDocument {
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  dataUrl: string;       // base64 data URL
+  uploadedAt: string;
+}
+
 export interface SavedTrip {
   id: string;
   conversationId: string;
@@ -82,5 +123,11 @@ export interface SavedTrip {
   payload: ChatPayload;
   todos: { id: string; text: string; done: boolean }[];
   notes: string;
+  // Per-stop feedback keyed by landmark name (lowercased).
+  feedback: Record<string, StopFeedback>;
+  // Manual flight/hotel/train/etc entries.
+  flightInfo: ManualFlightEntry[];
+  // Uploaded PDF e-tickets, vouchers, etc.
+  documents: UploadedDocument[];
   savedAt: string;
 }

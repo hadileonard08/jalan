@@ -1,11 +1,17 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import dynamic from 'next/dynamic';
-import { X, Plus, Trash2, CheckSquare, Square, Plane, Clipboard, StickyNote, MapPin, Calendar, Map, Bell } from 'lucide-react';
-import type { SavedTrip, ChatPayload } from '@/lib/chat-state';
+import {
+  X, Plus, Trash2, CheckSquare, Square, Plane, Clipboard, StickyNote,
+  MapPin, Calendar, Map, Bell, ThumbsUp, ThumbsDown, MessageSquare,
+  FileText, Upload, Download, Hotel, Train, Car, ChevronDown, ChevronUp,
+} from 'lucide-react';
+import type {
+  SavedTrip, ChatPayload, StopFeedback, StopComment,
+  ManualFlightEntry, UploadedDocument,
+} from '@/lib/chat-state';
 import type { DayTransport } from '@/agents/transport';
-import { getAirlineBookingUrl } from '@/lib/airline-booking';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -28,22 +34,596 @@ function formatDate(iso?: string | Date) {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-function formatDuration(minutes?: number | null): string {
-  if (!minutes || minutes <= 0) return '';
-  const h = Math.floor(minutes / 60);
-  const m = minutes % 60;
-  return m > 0 ? `${h}h ${m}m` : `${h}h`;
+function formatDateTime(iso?: string) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return d.toLocaleString('en-US', {
+    month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+  });
 }
 
-function formatStops(stops?: number | null): string {
-  if (stops === null || stops === undefined) return '';
-  if (stops === 0) return 'Nonstop';
-  if (stops === 1) return '1 stop';
-  return `${stops} stops`;
+// Extract landmark names from the itinerary markdown so we can attach
+// per-stop feedback. We look for bold text and IMAGE placeholders per day.
+function extractStopsFromItinerary(itinerary: string): { day: string; stops: { name: string; id: string }[] }[] {
+  if (!itinerary) return [];
+  const dayBlocks = itinerary.split(/(?=#+\s+Day\s+\d+)/i).filter(Boolean);
+  const result: { day: string; stops: { name: string; id: string }[] }[] = [];
+  const GENERIC = new Set([
+    'morning', 'afternoon', 'evening', 'night', 'lunch', 'dinner', 'breakfast',
+    'getting around', 'transport', 'tips', 'overview', 'summary',
+  ]);
+  const TRANSIT = /\b(line|subway|metro|train|railway|station|airport|bus|taxi|walk|transfer|fare|ticket|pass|express|monorail|tram|ferry)\b/i;
+
+  for (const block of dayBlocks) {
+    const headingMatch = block.match(/#+\s+Day\s+(\d+)/i);
+    if (!headingMatch) continue;
+    const day = headingMatch[1];
+    const stops: { name: string; id: string }[] = [];
+    const seen = new Set<string>();
+
+    // Image placeholders are explicit landmarks.
+    for (const m of block.matchAll(/!\[IMAGE:\s*([^\]]+)\]/g)) {
+      const name = m[1].trim();
+      const id = name.toLowerCase();
+      if (!seen.has(id)) { seen.add(id); stops.push({ name, id }); }
+    }
+    // Bold text.
+    for (const m of block.matchAll(/\*\*(.*?)\*\*/g)) {
+      const name = m[1].trim();
+      if (name.length < 3) continue;
+      if (GENERIC.has(name.toLowerCase())) continue;
+      if (TRANSIT.test(name)) continue;
+      if (/^(morning|afternoon|evening)/i.test(name)) continue;
+      const id = name.toLowerCase();
+      if (!seen.has(id)) { seen.add(id); stops.push({ name, id }); }
+    }
+    if (stops.length > 0) result.push({ day, stops });
+  }
+  return result;
 }
+
+// --- Stop feedback (thumbs up/down + comments) ---
+
+function getStopFeedback(trip: SavedTrip, stopId: string): StopFeedback {
+  return trip.feedback?.[stopId] || {
+    stopId,
+    thumbsUp: 0,
+    thumbsDown: 0,
+    userVote: null,
+    comments: [],
+  };
+}
+
+function StopFeedbackBar({
+  stopId,
+  stopName,
+  trip,
+  onUpdate,
+}: {
+  stopId: string;
+  stopName: string;
+  trip: SavedTrip;
+  onUpdate: (trip: SavedTrip) => void;
+}) {
+  const [showComments, setShowComments] = useState(false);
+  const [commentText, setCommentText] = useState('');
+  const fb = getStopFeedback(trip, stopId);
+
+  const vote = (direction: 'up' | 'down') => {
+    const current = getStopFeedback(trip, stopId);
+    const newFeedback: Record<string, StopFeedback> = { ...trip.feedback };
+    let thumbsUp = current.thumbsUp;
+    let thumbsDown = current.thumbsDown;
+    let userVote: 'up' | 'down' | null = direction;
+
+    // Toggle off if clicking the same vote.
+    if (current.userVote === direction) {
+      userVote = null;
+      if (direction === 'up') thumbsUp = Math.max(0, thumbsUp - 1);
+      else thumbsDown = Math.max(0, thumbsDown - 1);
+    } else {
+      // Switching vote: decrement old, increment new.
+      if (current.userVote === 'up') thumbsUp = Math.max(0, thumbsUp - 1);
+      if (current.userVote === 'down') thumbsDown = Math.max(0, thumbsDown - 1);
+      if (direction === 'up') thumbsUp += 1;
+      else thumbsDown += 1;
+    }
+
+    newFeedback[stopId] = { ...current, thumbsUp, thumbsDown, userVote };
+    onUpdate({ ...trip, feedback: newFeedback });
+  };
+
+  const addComment = () => {
+    if (!commentText.trim()) return;
+    const current = getStopFeedback(trip, stopId);
+    const newComment: StopComment = {
+      id: crypto.randomUUID(),
+      author: 'You',
+      text: commentText.trim(),
+      createdAt: new Date().toISOString(),
+    };
+    const newFeedback: Record<string, StopFeedback> = { ...trip.feedback };
+    newFeedback[stopId] = { ...current, comments: [...current.comments, newComment] };
+    onUpdate({ ...trip, feedback: newFeedback });
+    setCommentText('');
+  };
+
+  const deleteComment = (commentId: string) => {
+    const current = getStopFeedback(trip, stopId);
+    const newFeedback: Record<string, StopFeedback> = { ...trip.feedback };
+    newFeedback[stopId] = {
+      ...current,
+      comments: current.comments.filter((c) => c.id !== commentId),
+    };
+    onUpdate({ ...trip, feedback: newFeedback });
+  };
+
+  return (
+    <div className="mt-2 pt-2 border-t border-gray-100 dark:border-gray-700/50">
+      <div className="flex items-center gap-3">
+        <button
+          onClick={() => vote('up')}
+          className={`flex items-center gap-1 text-[13px] px-2 py-1 rounded-lg transition-colors ${
+            fb.userVote === 'up'
+              ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300'
+              : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'
+          }`}
+          title="Thumbs up"
+        >
+          <ThumbsUp size={14} />
+          {fb.thumbsUp > 0 && <span>{fb.thumbsUp}</span>}
+        </button>
+        <button
+          onClick={() => vote('down')}
+          className={`flex items-center gap-1 text-[13px] px-2 py-1 rounded-lg transition-colors ${
+            fb.userVote === 'down'
+              ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300'
+              : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'
+          }`}
+          title="Thumbs down"
+        >
+          <ThumbsDown size={14} />
+          {fb.thumbsDown > 0 && <span>{fb.thumbsDown}</span>}
+        </button>
+        <button
+          onClick={() => setShowComments(!showComments)}
+          className="flex items-center gap-1 text-[13px] px-2 py-1 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+          title="Comments"
+        >
+          <MessageSquare size={14} />
+          {fb.comments.length > 0 && <span>{fb.comments.length}</span>}
+          <span className="hidden sm:inline">Comment</span>
+        </button>
+      </div>
+
+      {showComments && (
+        <div className="mt-2 space-y-2">
+          {fb.comments.map((c) => (
+            <div key={c.id} className="flex items-start gap-2 group">
+              <div className="flex-1 text-[13px] text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/50 rounded-lg px-2.5 py-1.5">
+                <span className="font-medium text-gray-700 dark:text-gray-300">{c.author}: </span>
+                {c.text}
+                <span className="text-gray-400 dark:text-gray-600 ml-1">· {formatDateTime(c.createdAt)}</span>
+              </div>
+              <button
+                onClick={() => deleteComment(c.id)}
+                className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-600 p-1"
+              >
+                <Trash2 size={12} />
+              </button>
+            </div>
+          ))}
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={commentText}
+              onChange={(e) => setCommentText(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && addComment()}
+              placeholder="Add a note (e.g. 'Skip this, too touristy')..."
+              className="flex-1 text-[13px] border border-gray-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-blue-400"
+            />
+            <button
+              onClick={addComment}
+              className="p-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+            >
+              <Plus size={14} />
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// --- Itinerary tab with per-stop feedback ---
+
+function ItineraryTab({ trip, onUpdate }: { trip: SavedTrip; onUpdate: (trip: SavedTrip) => void }) {
+  const payload = trip.payload;
+  const dayStops = extractStopsFromItinerary(payload.itinerary || '');
+
+  // Build a map of stopId → { day, name } for quick lookup.
+  const stopByDay: Record<string, { name: string; id: string }[]> = {};
+  for (const d of dayStops) stopByDay[d.day] = d.stops;
+
+  return (
+    <div className="space-y-4">
+      <div className="prose prose-sm dark:prose-invert max-w-none text-gray-700 dark:text-gray-300">
+        {payload.itinerary ? (
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            components={{
+              img: ({ src, alt }) => (
+                <figure className="my-3">
+                  {src && <img src={src} alt={alt || ''} className="rounded-xl shadow-md w-full" loading="lazy" />}
+                  {alt && <figcaption className="text-[13px] text-gray-400 dark:text-gray-500 text-center mt-1">{alt}</figcaption>}
+                </figure>
+              ),
+              h1: ({ children }) => <h1 className="text-lg font-bold text-gray-900 dark:text-gray-100 mt-2 mb-1">{children}</h1>,
+              h2: ({ children }) => <h2 className="text-base font-bold text-gray-900 dark:text-gray-100 mt-3 mb-1">{children}</h2>,
+              h3: ({ children }) => <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-200 mt-2 mb-1">{children}</h3>,
+              strong: ({ children }) => <strong className="font-semibold text-gray-900 dark:text-gray-100">{children}</strong>,
+              ul: ({ children }) => <ul className="list-disc list-inside my-2 space-y-0.5">{children}</ul>,
+              ol: ({ children }) => <ol className="list-decimal list-inside my-2 space-y-0.5">{children}</ol>,
+            }}
+          >
+            {payload.itinerary}
+          </ReactMarkdown>
+        ) : (
+          <div className="text-sm text-gray-500 dark:text-gray-400">No itinerary saved.</div>
+        )}
+      </div>
+
+      {/* Per-stop collaboration cards */}
+      {dayStops.length > 0 && (
+        <div className="space-y-3 pt-2">
+          <div className="text-[13px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+            Stop Feedback
+          </div>
+          {dayStops.map(({ day, stops }) => (
+            <div key={day} className="space-y-2">
+              <div className="text-sm font-medium text-gray-700 dark:text-gray-300">Day {day}</div>
+              {stops.map((stop) => (
+                <div key={stop.id} className="border border-gray-100 dark:border-gray-700/50 rounded-xl p-2.5 bg-gray-50/50 dark:bg-gray-800/30">
+                  <div className="text-[13px] font-medium text-gray-800 dark:text-gray-200 flex items-center gap-1.5">
+                    <MapPin size={12} className="text-blue-500" />
+                    {stop.name}
+                  </div>
+                  <StopFeedbackBar
+                    stopId={stop.id}
+                    stopName={stop.name}
+                    trip={trip}
+                    onUpdate={onUpdate}
+                  />
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// --- Flights & Docs tab ---
+
+const ENTRY_TYPE_ICONS: Record<ManualFlightEntry['type'], typeof Plane> = {
+  flight: Plane,
+  hotel: Hotel,
+  train: Train,
+  car: Car,
+  other: FileText,
+};
+
+function FlightsDocsTab({ trip, onUpdate }: { trip: SavedTrip; onUpdate: (trip: SavedTrip) => void }) {
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({
+    type: 'flight' as ManualFlightEntry['type'],
+    label: '',
+    airlineOrProvider: '',
+    confirmationCode: '',
+    departureTime: '',
+    arrivalTime: '',
+    notes: '',
+  });
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+
+  const addEntry = () => {
+    if (!form.label.trim() && !form.airlineOrProvider.trim()) return;
+    const entry: ManualFlightEntry = {
+      id: crypto.randomUUID(),
+      type: form.type,
+      label: form.label.trim() || form.airlineOrProvider.trim(),
+      airlineOrProvider: form.airlineOrProvider.trim(),
+      confirmationCode: form.confirmationCode.trim(),
+      departureTime: form.departureTime || undefined,
+      arrivalTime: form.arrivalTime || undefined,
+      notes: form.notes.trim() || undefined,
+      createdAt: new Date().toISOString(),
+    };
+    onUpdate({ ...trip, flightInfo: [...(trip.flightInfo || []), entry] });
+    setForm({
+      type: 'flight', label: '', airlineOrProvider: '', confirmationCode: '',
+      departureTime: '', arrivalTime: '', notes: '',
+    });
+    setShowForm(false);
+  };
+
+  const deleteEntry = (id: string) => {
+    onUpdate({ ...trip, flightInfo: (trip.flightInfo || []).filter((e) => e.id !== id) });
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 10 * 1024 * 1024) {
+      alert('File too large. Maximum size is 10 MB.');
+      return;
+    }
+    if (file.type !== 'application/pdf') {
+      alert('Only PDF files are supported.');
+      return;
+    }
+    setUploading(true);
+    try {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = reader.result as string;
+        const doc: UploadedDocument = {
+          id: crypto.randomUUID(),
+          name: file.name,
+          mimeType: file.type,
+          size: file.size,
+          dataUrl,
+          uploadedAt: new Date().toISOString(),
+        };
+        onUpdate({ ...trip, documents: [...(trip.documents || []), doc] });
+        setUploading(false);
+        if (fileInputRef.current) fileInputRef.current.value = '';
+      };
+      reader.onerror = () => { alert('Failed to read file.'); setUploading(false); };
+      reader.readAsDataURL(file);
+    } catch {
+      alert('Upload failed.');
+      setUploading(false);
+    }
+  };
+
+  const deleteDoc = (id: string) => {
+    onUpdate({ ...trip, documents: (trip.documents || []).filter((d) => d.id !== id) });
+  };
+
+  const downloadDoc = (doc: UploadedDocument) => {
+    const a = document.createElement('a');
+    a.href = doc.dataUrl;
+    a.download = doc.name;
+    a.click();
+  };
+
+  const entries = trip.flightInfo || [];
+  const docs = trip.documents || [];
+
+  return (
+    <div className="space-y-4">
+      {/* Manual entry form */}
+      {showForm ? (
+        <div className="border border-gray-200 dark:border-gray-700 rounded-xl p-4 bg-gray-50 dark:bg-gray-800/50 space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Add Booking</h3>
+            <button onClick={() => setShowForm(false)} className="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 p-1">
+              <X size={16} />
+            </button>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-[13px] text-gray-500 dark:text-gray-400 mb-1 block">Type</label>
+              <select
+                value={form.type}
+                onChange={(e) => setForm({ ...form, type: e.target.value as ManualFlightEntry['type'] })}
+                className="w-full text-sm border border-gray-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-400"
+              >
+                <option value="flight">Flight</option>
+                <option value="hotel">Hotel</option>
+                <option value="train">Train</option>
+                <option value="car">Car</option>
+                <option value="other">Other</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-[13px] text-gray-500 dark:text-gray-400 mb-1 block">Label</label>
+              <input
+                type="text"
+                value={form.label}
+                onChange={(e) => setForm({ ...form, label: e.target.value })}
+                placeholder="Outbound Flight"
+                className="w-full text-sm border border-gray-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-400"
+              />
+            </div>
+            <div>
+              <label className="text-[13px] text-gray-500 dark:text-gray-400 mb-1 block">
+                {form.type === 'flight' ? 'Airline' : form.type === 'hotel' ? 'Hotel' : 'Provider'}
+              </label>
+              <input
+                type="text"
+                value={form.airlineOrProvider}
+                onChange={(e) => setForm({ ...form, airlineOrProvider: e.target.value })}
+                placeholder={form.type === 'flight' ? 'JAL' : form.type === 'hotel' ? 'Marriott' : 'Provider'}
+                className="w-full text-sm border border-gray-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-400"
+              />
+            </div>
+            <div>
+              <label className="text-[13px] text-gray-500 dark:text-gray-400 mb-1 block">Confirmation / PNR</label>
+              <input
+                type="text"
+                value={form.confirmationCode}
+                onChange={(e) => setForm({ ...form, confirmationCode: e.target.value })}
+                placeholder="ABC123"
+                className="w-full text-sm border border-gray-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-400"
+              />
+            </div>
+            <div>
+              <label className="text-[13px] text-gray-500 dark:text-gray-400 mb-1 block">Departure</label>
+              <input
+                type="datetime-local"
+                value={form.departureTime}
+                onChange={(e) => setForm({ ...form, departureTime: e.target.value })}
+                className="w-full text-sm border border-gray-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-400"
+              />
+            </div>
+            <div>
+              <label className="text-[13px] text-gray-500 dark:text-gray-400 mb-1 block">Arrival</label>
+              <input
+                type="datetime-local"
+                value={form.arrivalTime}
+                onChange={(e) => setForm({ ...form, arrivalTime: e.target.value })}
+                className="w-full text-sm border border-gray-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-400"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="text-[13px] text-gray-500 dark:text-gray-400 mb-1 block">Notes</label>
+            <input
+              type="text"
+              value={form.notes}
+              onChange={(e) => setForm({ ...form, notes: e.target.value })}
+              placeholder="Seat 14A, gate B12..."
+              className="w-full text-sm border border-gray-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-400"
+            />
+          </div>
+          <button
+            onClick={addEntry}
+            className="w-full bg-blue-600 text-white text-sm font-medium px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center gap-1.5"
+          >
+            <Plus size={16} /> Add Booking
+          </button>
+        </div>
+      ) : (
+        <button
+          onClick={() => setShowForm(true)}
+          className="w-full border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-xl py-3 text-sm text-gray-500 dark:text-gray-400 hover:border-blue-400 hover:text-blue-600 transition-colors flex items-center justify-center gap-1.5"
+        >
+          <Plus size={16} /> Add Flight / Hotel / Booking
+        </button>
+      )}
+
+      {/* Booking entries */}
+      {entries.length > 0 && (
+        <div className="space-y-2">
+          {entries.map((entry) => {
+            const Icon = ENTRY_TYPE_ICONS[entry.type] || FileText;
+            return (
+              <div key={entry.id} className="border border-gray-200 dark:border-gray-700 rounded-xl p-3 bg-white dark:bg-gray-800 group">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-start gap-2 flex-1 min-w-0">
+                    <div className="bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 p-2 rounded-lg flex-shrink-0">
+                      <Icon size={16} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium text-gray-900 dark:text-gray-100">{entry.label}</div>
+                      {entry.airlineOrProvider && (
+                        <div className="text-[13px] text-gray-500 dark:text-gray-400">{entry.airlineOrProvider}</div>
+                      )}
+                      {entry.confirmationCode && (
+                        <div className="text-[13px] text-gray-500 dark:text-gray-400">
+                          Ref: <span className="font-mono">{entry.confirmationCode}</span>
+                        </div>
+                      )}
+                      {entry.departureTime && (
+                        <div className="text-[13px] text-gray-500 dark:text-gray-400 mt-1">
+                          Dep: {formatDateTime(entry.departureTime)}
+                        </div>
+                      )}
+                      {entry.arrivalTime && (
+                        <div className="text-[13px] text-gray-500 dark:text-gray-400">
+                          Arr: {formatDateTime(entry.arrivalTime)}
+                        </div>
+                      )}
+                      {entry.notes && (
+                        <div className="text-[13px] text-gray-400 dark:text-gray-500 mt-1">{entry.notes}</div>
+                      )}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => deleteEntry(entry.id)}
+                    className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-600 p-1"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Document upload */}
+      <div className="border-t border-gray-100 dark:border-gray-700 pt-4 space-y-3">
+        <div className="text-[13px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+          Documents
+        </div>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".pdf,application/pdf"
+          onChange={handleFileUpload}
+          className="hidden"
+        />
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          disabled={uploading}
+          className="w-full border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-xl py-3 text-sm text-gray-500 dark:text-gray-400 hover:border-blue-400 hover:text-blue-600 transition-colors flex items-center justify-center gap-1.5 disabled:opacity-50"
+        >
+          {uploading ? (
+            <><span className="animate-spin">⟳</span> Uploading...</>
+          ) : (
+            <><Upload size={16} /> Upload PDF (e-ticket, voucher — max 10 MB)</>
+          )}
+        </button>
+
+        {docs.length > 0 && (
+          <div className="space-y-2">
+            {docs.map((doc) => (
+              <div key={doc.id} className="border border-gray-200 dark:border-gray-700 rounded-xl p-3 bg-white dark:bg-gray-800 group flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 flex-1 min-w-0">
+                  <div className="bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 p-2 rounded-lg flex-shrink-0">
+                    <FileText size={16} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">{doc.name}</div>
+                    <div className="text-[13px] text-gray-400 dark:text-gray-500">
+                      {(doc.size / 1024).toFixed(0)} KB · {formatDate(doc.uploadedAt)}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1 flex-shrink-0">
+                  <button
+                    onClick={() => downloadDoc(doc)}
+                    className="text-gray-400 hover:text-blue-600 p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700"
+                    title="Download"
+                  >
+                    <Download size={16} />
+                  </button>
+                  <button
+                    onClick={() => deleteDoc(doc.id)}
+                    className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-600 p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700"
+                    title="Delete"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// --- SavedTripCard ---
 
 function SavedTripCard({ trip, onUpdate, onDelete }: { trip: SavedTrip; onUpdate: (trip: SavedTrip) => void; onDelete?: () => void }) {
-  const [activeTab, setActiveTab] = useState<'deals' | 'itinerary' | 'routes' | 'packing' | 'todos' | 'notes'>('deals');
+  const [activeTab, setActiveTab] = useState<'itinerary' | 'routes' | 'flights' | 'packing' | 'todos' | 'notes'>('itinerary');
   const [todoText, setTodoText] = useState('');
 
   const addTodo = () => {
@@ -114,7 +694,7 @@ function SavedTripCard({ trip, onUpdate, onDelete }: { trip: SavedTrip; onUpdate
       </div>
 
       <div className="flex overflow-x-auto border-b border-gray-200 dark:border-gray-700">
-        {(['deals', 'itinerary', 'routes', 'packing', 'todos', 'notes'] as const).map((tab) => (
+        {(['itinerary', 'routes', 'flights', 'packing', 'todos', 'notes'] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -122,84 +702,14 @@ function SavedTripCard({ trip, onUpdate, onDelete }: { trip: SavedTrip; onUpdate
               activeTab === tab ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-600 bg-blue-50 dark:bg-blue-900/20' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/50'
             }`}
           >
-            {tab}
+            {tab === 'flights' ? 'Flights & Docs' : tab}
           </button>
         ))}
       </div>
 
       <div className="p-4">
-        {activeTab === 'deals' && (
-          <div className="space-y-2">
-            {payload.deals && payload.deals.length > 0 ? (
-              payload.deals.slice(0, 5).map((deal, i) => {
-                const bookingUrl = getAirlineBookingUrl(
-                  deal.airline || '',
-                  deal.originCode || '',
-                  deal.destinationCode || '',
-                  deal.departureDate
-                );
-                return (
-                  <a
-                    key={i}
-                    href={bookingUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="block border border-black/[0.05] dark:border-white/[0.1] rounded-2xl p-4 hover:border-blue-500/40 hover:shadow-md active:scale-95 transition-all duration-200 ease-out no-underline"
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="font-medium text-gray-900 dark:text-gray-100">
-                        {deal.originCode} → {deal.destinationCode}
-                      </div>
-                      <div className="text-blue-600 dark:text-blue-400 font-semibold">
-                        {Number(deal.pointsRequired).toLocaleString()} pts
-                      </div>
-                    </div>
-                    <div className="text-sm text-gray-500 dark:text-gray-400">
-                      {deal.airline} · {deal.cabin} · {formatDate(deal.departureDate)}
-                    </div>
-                    <div className="text-[13px] text-gray-400 dark:text-gray-500 mt-1">
-                      {formatDuration(deal.duration)}
-                      {deal.duration && deal.stops !== null && deal.stops !== undefined ? ' · ' : ''}
-                      {formatStops(deal.stops)}
-                    </div>
-                    {deal.taxesAndFees ? (
-                      <div className="text-[13px] text-gray-500 dark:text-gray-400 mt-1">+ ${Number(deal.taxesAndFees).toFixed(2)} taxes</div>
-                    ) : null}
-                  </a>
-                );
-              })
-            ) : (
-              <div className="text-sm text-gray-500 dark:text-gray-400">No deals saved.</div>
-            )}
-          </div>
-        )}
-
         {activeTab === 'itinerary' && (
-          <div className="prose prose-sm dark:prose-invert max-w-none text-gray-700 dark:text-gray-300">
-            {payload.itinerary ? (
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
-                components={{
-                  img: ({ src, alt }) => (
-                    <figure className="my-3">
-                      {src && <img src={src} alt={alt || ''} className="rounded-xl shadow-md w-full" loading="lazy" />}
-                      {alt && <figcaption className="text-[13px] text-gray-400 dark:text-gray-500 text-center mt-1">{alt}</figcaption>}
-                    </figure>
-                  ),
-                  h1: ({ children }) => <h1 className="text-lg font-bold text-gray-900 dark:text-gray-100 mt-2 mb-1">{children}</h1>,
-                  h2: ({ children }) => <h2 className="text-base font-bold text-gray-900 dark:text-gray-100 mt-3 mb-1">{children}</h2>,
-                  h3: ({ children }) => <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-200 mt-2 mb-1">{children}</h3>,
-                  strong: ({ children }) => <strong className="font-semibold text-gray-900 dark:text-gray-100">{children}</strong>,
-                  ul: ({ children }) => <ul className="list-disc list-inside my-2 space-y-0.5">{children}</ul>,
-                  ol: ({ children }) => <ol className="list-decimal list-inside my-2 space-y-0.5">{children}</ol>,
-                }}
-              >
-                {payload.itinerary}
-              </ReactMarkdown>
-            ) : (
-              <div className="text-sm text-gray-500 dark:text-gray-400">No itinerary saved.</div>
-            )}
-          </div>
+          <ItineraryTab trip={trip} onUpdate={onUpdate} />
         )}
 
         {activeTab === 'routes' && (
@@ -227,6 +737,10 @@ function SavedTripCard({ trip, onUpdate, onDelete }: { trip: SavedTrip; onUpdate
               <div className="text-sm text-gray-500 dark:text-gray-400">No routes saved.</div>
             )}
           </div>
+        )}
+
+        {activeTab === 'flights' && (
+          <FlightsDocsTab trip={trip} onUpdate={onUpdate} />
         )}
 
         {activeTab === 'packing' && (
@@ -312,13 +826,6 @@ function SavedTripCard({ trip, onUpdate, onDelete }: { trip: SavedTrip; onUpdate
 function buildTripSummary(trip: SavedTrip): string {
   const p = trip.payload;
   let summary = `${trip.destination} — ${trip.dates}\n\n`;
-  if (p.deals && p.deals.length > 0) {
-    summary += 'Deals:\n';
-    p.deals.forEach((d) => {
-      summary += `- ${d.originCode} → ${d.destinationCode} · ${d.airline} · ${d.pointsRequired} pts\n`;
-    });
-    summary += '\n';
-  }
   if (p.itinerary) summary += `Itinerary:\n${p.itinerary}\n\n`;
   if (p.routeLinks && p.routeLinks.length > 0) {
     summary += `Routes:\n${p.routeLinks.map((r) => `- Day ${r.day}: ${r.url}`).join('\n')}\n\n`;
@@ -326,6 +833,9 @@ function buildTripSummary(trip: SavedTrip): string {
   if (p.packingTips) summary += `Packing:\n${p.packingTips}\n\n`;
   if (trip.notes) summary += `Notes:\n${trip.notes}\n\n`;
   if (trip.todos.length > 0) summary += `To-dos:\n${trip.todos.map((t) => `- [${t.done ? 'x' : ' '}] ${t.text}`).join('\n')}\n`;
+  if (trip.flightInfo && trip.flightInfo.length > 0) {
+    summary += `\nBookings:\n${trip.flightInfo.map((e) => `- ${e.label} (${e.airlineOrProvider}) · ${e.confirmationCode || 'no ref'}`).join('\n')}\n`;
+  }
   return summary;
 }
 
@@ -369,7 +879,13 @@ export default function OneStopPanel({ isOpen, onClose, savedTrips, setSavedTrip
       fetch(`/api/saved-trips/${updated.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ todos: updated.todos, notes: updated.notes }),
+        body: JSON.stringify({
+          todos: updated.todos,
+          notes: updated.notes,
+          feedback: updated.feedback || {},
+          flightInfo: updated.flightInfo || [],
+          documents: updated.documents || [],
+        }),
       }).catch(() => { /* silent fail — local state is already updated */ });
     }
   };
@@ -654,7 +1170,7 @@ export default function OneStopPanel({ isOpen, onClose, savedTrips, setSavedTrip
                   <Clipboard size={28} />
                 </div>
                 <p className="text-base">No saved trips yet.</p>
-                <p className="text-sm mt-1">Save a deal, itinerary, or packing list from any assistant message.</p>
+                <p className="text-sm mt-1">Save an itinerary from any assistant message, or save a shared trip.</p>
               </div>
             </div>
           ) : savedTrips.length === 1 ? (
