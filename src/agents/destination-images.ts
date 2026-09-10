@@ -117,6 +117,14 @@ const BAD_IMAGE_PATTERNS = [
   /placeholder/i,
   /\.pdf(?:\.|$)/i,
   /\.svg$/i,  // SVGs are usually icons/diagrams, not photos
+  /_concert_/i,
+  /_aerial_/i,
+  /_gnr_/i,
+  /_live_/i,
+  /_people_/i,
+  /_crowd_/i,
+  /from_the_air/i,
+  /_panorama_/i,
 ];
 
 // Minimum relevance score (0-1) for accepting an image. Images below this
@@ -129,8 +137,8 @@ const RANK_TIMEOUT_MS = 30000; // downloading + encoding several images takes lo
 const RANK_MIN_SCORE = parseFloat(process.env.VECTOR_IMAGE_MIN_SCORE || '0.22');
 const RANK_CANDIDATES_PER_PROVIDER = 3;
 const RANK_MAX_CANDIDATES = 9;
-const MIN_IMAGE_WIDTH = 500;
-const MIN_IMAGE_HEIGHT = 300;
+const MIN_IMAGE_WIDTH = 1000;
+const MIN_IMAGE_HEIGHT = 600;
 const imageSearchCache = new Map<string, Promise<string | null>>();
 
 // Common terms in image metadata/URLs that indicate motion blur, long exposure,
@@ -153,9 +161,43 @@ const BLURRY_WORDS = [
   'silhouette',
 ];
 
+// Titles/filenames that indicate the image is not a clear landmark photo
+// (concert, aerial view, crowd, event performance, etc.).
+const BAD_TITLE_PATTERNS = [
+  /\bconcert\b/i,
+  /\bgig\b/i,
+  /\bfestival\b/i,
+  /\bperformance\b/i,
+  /\bstage\b/i,
+  /\bband\b/i,
+  /\blive\b/i,
+  /\baerial\b/i,
+  /\baerial view\b/i,
+  /\bfrom above\b/i,
+  /\bbird[\s\u2019']?s eye\b/i,
+  /\bsatellite\b/i,
+  /\bcrowd\b/i,
+  /\bpeople\b/i,
+  /\bprotest\b/i,
+  /\brally\b/i,
+  /\bconference\b/i,
+  /\bsigning\b/i,
+  /\bposter\b/i,
+  /\bguns n'? roses\b/i,
+  /\bgnr\b/i,
+  /\bfrom the air\b/i,
+  /\bair view\b/i,
+  /\bpanorama\b/i,
+];
+
 function isBlurryImage(title: string, url: string, tags: string[] = []): boolean {
   const text = `${title} ${url} ${tags.join(' ')}`.toLowerCase();
   return BLURRY_WORDS.some((word) => text.includes(word));
+}
+
+function isBadImageTitle(title: string, url: string = ''): boolean {
+  const text = `${title} ${url}`.toLowerCase().replace(/[\-_./]+/g, ' ');
+  return BAD_TITLE_PATTERNS.some((pattern) => pattern.test(text));
 }
 
 function adjustImageScore(baseScore: number, title: string, url: string, width?: number, height?: number, tags: string[] = []): number {
@@ -268,6 +310,7 @@ function cleanTerm(term: string): string {
 }
 
 export function scoreImageRelevance(image: ImageMetadata, term: string, originalRankIndex = 0): number {
+  if (isBadImageTitle(image.title)) return 0;
   if (hasMismatchWord(`${image.title} ${image.tags.join(' ')}`, '', term)) return 0;
   const normalize = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9\s]/g, ' ');
   const candidateWords = [...new Set(normalize(`${image.title} ${image.tags.join(' ')}`).split(/\s+/).filter(Boolean))];
@@ -308,6 +351,7 @@ function hasGoodDimensions(width?: number, height?: number): boolean {
   if (!width || !height) return true; // If dimensions unknown, don't reject.
   if (width < MIN_IMAGE_WIDTH || height < MIN_IMAGE_HEIGHT) return false;  // Too small / not clear enough.
   if (height > width * 2) return false;  // Very tall — likely a sign/banner.
+  if (width > height * 3) return false;  // Extreme panorama — landmark appears tiny.
   return true;
 }
 
@@ -336,7 +380,7 @@ async function fetchWikimediaCommonsImages(term: string, maxResults = RANK_CANDI
   try {
     const headers = { 'User-Agent': 'flight-deal-dashboard/1.0 (image lookup)' };
     const searchRes = await fetch(
-      `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(term)}&gsrnamespace=6&gsrlimit=12&prop=imageinfo&iiprop=url|thumb|size&iiurlwidth=1200&format=json&origin=*`,
+      `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(term)}&gsrnamespace=6&gsrlimit=12&prop=imageinfo&iiprop=url|size&iiurlwidth=1200&format=json&origin=*`,
       { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }
     );
     if (!searchRes.ok) return [];
@@ -353,9 +397,11 @@ async function fetchWikimediaCommonsImages(term: string, maxResults = RANK_CANDI
       const title = page?.title;
       if (imageinfo && imageinfo.length > 0) {
         const url = imageinfo[0].thumburl || imageinfo[0].url;
-        const width = imageinfo[0]?.thumbwidth || imageinfo[0]?.width;
-        const height = imageinfo[0]?.thumbheight || imageinfo[0]?.height;
-        if (url && !isBadImageUrl(url) && hasGoodDimensions(width, height)) {
+        // Use the original dimensions, not the requested thumb size, so we don't
+        // accidentally serve a small original scaled up in the thumburl.
+        const width = imageinfo[0]?.width;
+        const height = imageinfo[0]?.height;
+        if (url && !isBadImageUrl(url) && !isBadImageTitle(title || '') && hasGoodDimensions(width, height)) {
           const baseScore = scoreImageRelevance({ title: title || '', tags: [] }, term, rankIndex);
           const score = adjustImageScore(baseScore, title || '', url, width, height);
           candidates.push({ url, title: title || '', score, width, height });
@@ -431,7 +477,7 @@ async function collectAndRankImages(searchTerm: string, useVector = true): Promi
   for (const result of results) {
     if (result.status === 'fulfilled' && result.value) {
       for (const c of result.value) {
-        if (!isBadImageUrl(c.url) && hasGoodDimensions(c.width, c.height) && !seen.has(c.url)) {
+        if (!isBadImageUrl(c.url) && !isBadImageTitle(c.title || '', c.url) && hasGoodDimensions(c.width, c.height) && !seen.has(c.url)) {
           seen.add(c.url);
           candidates.push(c);
         }
@@ -453,9 +499,9 @@ async function collectAndRankImages(searchTerm: string, useVector = true): Promi
     .sort((a, b) => b.score - a.score);
   if (accepted.length > 0) return accepted[0].url;
 
-  // Last resort: even a marginal candidate is better than nothing if it's not a bad URL.
+  // Last resort: even a marginal candidate is better than nothing if it's not a bad URL/title.
   candidates.sort((a, b) => b.score - a.score);
-  const best = candidates.find(c => !isBadImageUrl(c.url));
+  const best = candidates.find(c => !isBadImageUrl(c.url) && !isBadImageTitle(c.title || '', c.url));
   return best?.url || null;
 }
 
@@ -573,7 +619,8 @@ async function fetchOpenverseImages(term: string, maxResults = RANK_CANDIDATES_P
         ? result.tags.map((t: any) => (typeof t === 'string' ? t : t?.name || '')).filter(Boolean)
         : [];
 
-      const candidateUrl = url && !isBadImageUrl(url) ? url : (thumb && !isBadImageUrl(thumb) ? thumb : null);
+      // Only use the full image URL; Openverse thumbnails are too small for our display.
+      const candidateUrl = url && !isBadImageUrl(url) && !isBadImageTitle(title, url) ? url : null;
       if (!candidateUrl) continue;
       if (!hasGoodDimensions(width, height)) continue;
 
@@ -625,7 +672,7 @@ async function fetchPexelsImages(term: string, maxResults = RANK_CANDIDATES_PER_
       const alt = photo.alt || '';
       const width = photo.width;
       const height = photo.height;
-      if (url && !isBadImageUrl(url) && hasGoodDimensions(width, height)) {
+      if (url && !isBadImageUrl(url) && !isBadImageTitle(alt, url) && hasGoodDimensions(width, height)) {
         const baseScore = scoreImageRelevance({ title: alt, tags: [] }, term, rankIndex);
         const score = adjustImageScore(baseScore, alt, url, width, height);
         candidates.push({ url, alt, score, width, height });
