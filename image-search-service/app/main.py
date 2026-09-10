@@ -307,6 +307,22 @@ async def search(request: SearchRequest):
     return results
 
 
+@app.get("/images")
+async def list_images():
+    """Return a list of all stored image URLs for client-side deduplication."""
+
+    def _list() -> List[str]:
+        conn = get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT image_url FROM destination_photos;")
+                return [row[0] for row in cur.fetchall()]
+        finally:
+            conn.close()
+
+    return await anyio.to_thread.run_sync(_list)
+
+
 @app.get("/health")
 async def health():
     """Health check endpoint."""

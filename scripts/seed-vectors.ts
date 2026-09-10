@@ -2,17 +2,69 @@ import 'dotenv/config';
 import { AIRPORT_NAMES } from '../src/lib/airports';
 
 const SERVICE_URL = process.env.IMAGE_SEARCH_SERVICE_URL;
+const PEXELS_API_KEY = process.env.PEXELS_API_KEY;
 
-// Tuned to keep memory and Wikimedia rate limits sane.
+// Tuned to keep memory and per-provider rate limits sane while maximizing diversity.
 const BATCH_SIZE = 16;
-const PER_TERM = 5;
-const TERM_VARIANTS = ['', 'skyline', 'landmark', 'night', 'beach'];
-const SLEEP_MS = 200; // ~5 Wikimedia requests per second, polite.
+const PER_SOURCE = 3; // only a few per term per source — avoids 100 pictures of the same temple
+const SLEEP_MS = 250; // polite cadence across the three sources
+
+// Diverse search variants per destination. This spreads the corpus across cityscapes,
+// landmarks, food markets, nature, and architecture instead of one bucket per city.
+const TERM_VARIANTS = [
+  '',
+  'skyline',
+  'landmark',
+  'temple',
+  'market',
+  'night',
+  'beach',
+  'park',
+  'street',
+  'bridge',
+  'palace',
+  'garden',
+];
 
 interface Candidate {
   image_url: string;
   location_name: string;
 }
+
+const BAD_IMAGE_PATTERNS = [
+  /flag_of/i,
+  /\/flag\//i,
+  /_flag\./i,
+  /emblem_of/i,
+  /coat_of_arms/i,
+  /_emblem\./i,
+  /_logo/i,
+  /logo_/i,
+  /\/logo\//i,
+  /_icon/i,
+  /icon_/i,
+  /_seal/i,
+  /seal_of/i,
+  /_map\./i,
+  /\/map\//i,
+  /_map_/i,
+  /location_map/i,
+  /relief_map/i,
+  /topographic/i,
+  /_diagram/i,
+  /diagram_/i,
+  /_chart/i,
+  /_graph/i,
+  /_infographic/i,
+  /_sign\./i,
+  /_plaque/i,
+  /_statue_of/i,
+  /text_document/i,
+  /_blank\./i,
+  /placeholder/i,
+  /\.pdf(?:\.|$)/i,
+  /\.svg$/i,
+];
 
 function hasGoodDimensions(width?: number, height?: number): boolean {
   if (!width || !height) return true; // accept if unknown
@@ -22,47 +74,31 @@ function hasGoodDimensions(width?: number, height?: number): boolean {
 }
 
 function isBadImageUrl(url: string): boolean {
-  const BAD_IMAGE_PATTERNS = [
-    /flag_of/i,
-    /\/flag\//i,
-    /_flag\./i,
-    /emblem_of/i,
-    /coat_of_arms/i,
-    /_emblem\./i,
-    /_logo/i,
-    /logo_/i,
-    /\/logo\//i,
-    /_icon/i,
-    /icon_/i,
-    /_seal/i,
-    /seal_of/i,
-    /_map\./i,
-    /\/map\//i,
-    /_map_/i,
-    /location_map/i,
-    /relief_map/i,
-    /topographic/i,
-    /_diagram/i,
-    /diagram_/i,
-    /_chart/i,
-    /_graph/i,
-    /_infographic/i,
-    /_sign\./i,
-    /_plaque/i,
-    /_statue_of/i,
-    /text_document/i,
-    /_blank\./i,
-    /placeholder/i,
-    /\.pdf(?:\.|$)/i,
-    /\.svg$/i,
-  ];
   return BAD_IMAGE_PATTERNS.some(pattern => pattern.test(url));
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function fetchExistingUrls(): Promise<Set<string>> {
+  if (!SERVICE_URL) return new Set();
+  try {
+    const res = await fetch(`${SERVICE_URL}/images`, {
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) return new Set();
+    const data = (await res.json()) as string[];
+    return new Set(data);
+  } catch {
+    return new Set();
+  }
 }
 
 async function fetchWikimediaUrls(term: string, limit: number): Promise<Candidate[]> {
   try {
     const res = await fetch(
-      `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(term)}&gsrnamespace=6&gsrlimit=${limit * 2}&prop=imageinfo&iiprop=url|thumb|size&iiurlwidth=800&format=json&origin=*`,
+      `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(term)}&gsrnamespace=6&gsrlimit=${Math.min(limit * 2, 50)}&prop=imageinfo&iiprop=url|thumb|size&iiurlwidth=800&format=json&origin=*`,
       {
         headers: { 'User-Agent': 'Jalan Image Search/1.0 (seed)' },
         signal: AbortSignal.timeout(15000),
@@ -92,6 +128,91 @@ async function fetchWikimediaUrls(term: string, limit: number): Promise<Candidat
   }
 }
 
+async function fetchOpenverseUrls(term: string, limit: number): Promise<Candidate[]> {
+  try {
+    const res = await fetch(
+      `https://api.openverse.org/v1/images/?q=${encodeURIComponent(term)}&page_size=${Math.min(limit * 2, 20)}`,
+      {
+        headers: { 'User-Agent': 'Jalan Image Search/1.0 (seed)' },
+        signal: AbortSignal.timeout(8000),
+      }
+    );
+    if (!res.ok) return [];
+    const data = (await res.json()) as any;
+    if (!data?.results || data.results.length === 0) return [];
+
+    const candidates: Candidate[] = [];
+    for (const result of data.results) {
+      const url = result.url || result.thumbnail;
+      const width = result.width;
+      const height = result.height;
+      if (!url || isBadImageUrl(url) || !hasGoodDimensions(width, height)) continue;
+      candidates.push({ image_url: url, location_name: term });
+      if (candidates.length >= limit) break;
+    }
+    return candidates;
+  } catch (error) {
+    console.error('Openverse search failed for', term, ':', (error as Error).message);
+    return [];
+  }
+}
+
+async function fetchPexelsUrls(term: string, limit: number): Promise<Candidate[]> {
+  if (!PEXELS_API_KEY || PEXELS_API_KEY.includes('your_pexels_api_key')) return [];
+  try {
+    const res = await fetch(
+      `https://api.pexels.com/v1/search?query=${encodeURIComponent(term)}&per_page=${Math.min(limit * 2, 15)}&orientation=landscape`,
+      {
+        headers: { Authorization: PEXELS_API_KEY },
+        signal: AbortSignal.timeout(8000),
+      }
+    );
+    if (!res.ok) return [];
+    const data = (await res.json()) as any;
+    if (!data?.photos || data.photos.length === 0) return [];
+
+    const candidates: Candidate[] = [];
+    for (const photo of data.photos) {
+      const url = photo.src?.large || photo.src?.medium || photo.src?.small || photo.src?.original;
+      const width = photo.width;
+      const height = photo.height;
+      if (!url || isBadImageUrl(url) || !hasGoodDimensions(width, height)) continue;
+      candidates.push({ image_url: url, location_name: term });
+      if (candidates.length >= limit) break;
+    }
+    return candidates;
+  } catch (error) {
+    console.error('Pexels search failed for', term, ':', (error as Error).message);
+    return [];
+  }
+}
+
+async function fetchAllUrls(term: string, limit: number): Promise<Candidate[]> {
+  // Race the three sources in parallel. Keep per-source limits low to diversify.
+  const [wiki, openverse, pexels] = await Promise.all([
+    fetchWikimediaUrls(term, limit),
+    fetchOpenverseUrls(term, limit),
+    PEXELS_API_KEY ? fetchPexelsUrls(term, limit) : Promise.resolve([]),
+  ]);
+
+  // Interleave sources so no single source dominates the queue.
+  const candidates: Candidate[] = [];
+  const sources = [wiki, openverse, pexels].filter(s => s.length > 0);
+  let i = 0;
+  while (candidates.length < limit) {
+    let addedThisRound = false;
+    for (const source of sources) {
+      if (source[i]) {
+        candidates.push(source[i]);
+        addedThisRound = true;
+      }
+    }
+    if (!addedThisRound) break;
+    i++;
+  }
+  return candidates.slice(0, limit);
+}
+
 async function ingestBatch(batch: Candidate[]): Promise<{ ingested: number; failed: number }> {
   if (!SERVICE_URL) {
     throw new Error('IMAGE_SEARCH_SERVICE_URL is not set');
@@ -110,10 +231,6 @@ async function ingestBatch(batch: Candidate[]): Promise<{ ingested: number; fail
   return { ingested: data.ingested || 0, failed: data.failed || 0 };
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
 async function main() {
   const limit = Number(process.argv[2]) || 1000;
   if (!SERVICE_URL) {
@@ -121,39 +238,39 @@ async function main() {
     process.exit(1);
   }
 
-  // Unique city names from the airport lookup.
+  const existing = await fetchExistingUrls();
+  console.log(`[seed] ${existing.size} images already in vector DB`);
+
   const cities = Array.from(new Set(Object.values(AIRPORT_NAMES))).sort();
   console.log(`[seed] ${cities.length} unique destinations; target ${limit} images`);
 
-  const seen = new Set<string>();
+  const seen = new Set(existing);
   const queue: Candidate[] = [];
 
   for (const city of cities) {
     if (queue.length >= limit) break;
-
-    const terms = TERM_VARIANTS
-      .map(v => (v ? `${city} ${v}` : city).trim())
-      .filter((t, i, arr) => arr.indexOf(t) === i); // dedupe variants
-
-    for (const term of terms) {
+    for (const variant of TERM_VARIANTS) {
       if (queue.length >= limit) break;
-      const candidates = await fetchWikimediaUrls(term, Math.min(PER_TERM, limit - queue.length));
+      const term = variant ? `${city} ${variant}` : city;
+      const candidates = await fetchAllUrls(term, PER_SOURCE);
       for (const c of candidates) {
         if (seen.has(c.image_url)) continue;
         seen.add(c.image_url);
         queue.push(c);
         if (queue.length >= limit) break;
       }
+      process.stdout.write(`\r[seed] collected ${queue.length}/${limit} candidates`);
       await sleep(SLEEP_MS);
     }
   }
 
+  process.stdout.write('\n');
   if (queue.length === 0) {
-    console.log('[seed] no candidates found');
+    console.log('[seed] no new candidates found');
     return;
   }
 
-  console.log(`[seed] ingesting ${queue.length} unique images in batches of ${BATCH_SIZE}`);
+  console.log(`[seed] ingesting ${queue.length} unique new images in batches of ${BATCH_SIZE}`);
   let totalIngested = 0;
   let totalFailed = 0;
 
@@ -163,15 +280,14 @@ async function main() {
       const result = await ingestBatch(batch);
       totalIngested += result.ingested;
       totalFailed += result.failed;
-      process.stdout.write(`  batch ${Math.floor(i / BATCH_SIZE) + 1}: +${result.ingested} `);
-      if (result.failed) process.stdout.write(`(-${result.failed} failed) `);
-      process.stdout.write('\n');
+      const progress = `batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(queue.length / BATCH_SIZE)}: +${result.ingested}`;
+      console.log(`  ${progress}` + (result.failed ? ` (-${result.failed} failed)` : ''));
     } catch (error) {
       console.error('\n[seed] batch failed:', (error as Error).message);
     }
   }
 
-  console.log(`[seed] done — ingested ${totalIngested}, failed ${totalFailed}, target ${queue.length}`);
+  console.log(`[seed] done — ingested ${totalIngested}, failed ${totalFailed}, queued ${queue.length}`);
 }
 
 main().catch((error) => {
