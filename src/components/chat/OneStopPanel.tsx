@@ -1,11 +1,18 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import dynamic from 'next/dynamic';
 import { X, Plus, Trash2, CheckSquare, Square, Plane, Clipboard, StickyNote, MapPin, Calendar, Map, Bell } from 'lucide-react';
 import type { SavedTrip, ChatPayload } from '@/lib/chat-state';
+import type { DayTransport } from '@/agents/transport';
 import { getAirlineBookingUrl } from '@/lib/airline-booking';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+
+const DailyRouteMap = dynamic(() => import('./DailyRouteMap'), {
+  ssr: false,
+  loading: () => <div className="w-full h-72 rounded-2xl bg-gray-100 dark:bg-[#2c2c2e] animate-pulse" />,
+});
 
 interface OneStopPanelProps {
   isOpen: boolean;
@@ -196,7 +203,10 @@ function SavedTripCard({ trip, onUpdate, onDelete }: { trip: SavedTrip; onUpdate
         )}
 
         {activeTab === 'routes' && (
-          <div className="space-y-2">
+          <div className="space-y-3">
+            {payload.transportPlan?.days && payload.transportPlan.days.length > 0 && (
+              <OneStopRouteMap days={payload.transportPlan.days} />
+            )}
             {payload.routeLinks && payload.routeLinks.length > 0 ? (
               payload.routeLinks.map((link, i) => (
                 <a
@@ -317,6 +327,32 @@ function buildTripSummary(trip: SavedTrip): string {
   if (trip.notes) summary += `Notes:\n${trip.notes}\n\n`;
   if (trip.todos.length > 0) summary += `To-dos:\n${trip.todos.map((t) => `- [${t.done ? 'x' : ' '}] ${t.text}`).join('\n')}\n`;
   return summary;
+}
+
+function OneStopRouteMap({ days }: { days: DayTransport[] }) {
+  const [activeDay, setActiveDay] = useState(days[0]?.day || '1');
+  const activeDayData = days.find((d) => d.day === activeDay) || days[0];
+  if (!activeDayData) return null;
+  return (
+    <div className="border border-black/[0.05] dark:border-white/[0.1] rounded-2xl p-3">
+      <div className="flex gap-2 mb-3 overflow-x-auto pb-1 scrollbar-hide">
+        {days.map((d) => (
+          <button
+            key={d.day}
+            onClick={() => setActiveDay(d.day)}
+            className={`flex-shrink-0 px-3 py-1.5 rounded-full text-sm font-medium border transition-colors ${
+              activeDay === d.day
+                ? 'bg-blue-600 text-white border-blue-600'
+                : 'bg-white dark:bg-[#2c2c2e] text-gray-700 dark:text-gray-200 border-black/[0.05] dark:border-white/[0.1] hover:border-blue-500/40'
+            }`}
+          >
+            Day {d.day}
+          </button>
+        ))}
+      </div>
+      <DailyRouteMap waypoints={activeDayData.waypoints} polyline={activeDayData.polyline} />
+    </div>
+  );
 }
 
 export default function OneStopPanel({ isOpen, onClose, savedTrips, setSavedTrips, isSignedIn }: OneStopPanelProps) {
