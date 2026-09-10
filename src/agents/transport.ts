@@ -1,4 +1,7 @@
 import { getChatModel } from '../lib/ai-provider';
+import { db } from '../db';
+import { geocodedLocations } from '../db/schema';
+import { eq } from 'drizzle-orm';
 import type { RouteLink } from './itinerary-guardrails';
 
 // Generic transit terms that the LLM might use as stop names.
@@ -77,65 +80,127 @@ interface GeocodeResult {
 }
 
 const FETCH_TIMEOUT_MS = 5000;
+const NOMINATIM_DELAY_MS = 1000;
 
-const geocodeCache = new Map<string, Promise<GeocodeResult | null>>();
+const inFlight = new Map<string, Promise<GeocodeResult | null>>();
+const processCache = new Map<string, GeocodeResult | null>();
+let lastNominatimAt = 0;
+let throttleQueue = Promise.resolve();
 
-async function geocode(place: string, city: string): Promise<GeocodeResult | null> {
-  const cacheKey = `${place.toLowerCase()}|${city.toLowerCase()}`;
-  const cached = geocodeCache.get(cacheKey);
-  if (cached) return cached;
-  const lookup = geocodeUncached(place, city);
-  geocodeCache.set(cacheKey, lookup);
-  return lookup;
+function normalizeQueryKey(place: string, city: string): string {
+  return `${place.trim().toLowerCase()}:${city.trim().toLowerCase()}`;
 }
 
-async function geocodeUncached(place: string, city: string): Promise<GeocodeResult | null> {
+async function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function geocodeNominatim(place: string, city: string): Promise<GeocodeResult | null> {
   const headers = { 'User-Agent': 'flight-deal-dashboard/1.0 (transport agent)' };
-  // Try up to 2 times — Nominatim rate-limits and returns 429 or empty results.
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const query = encodeURIComponent(`${place}, ${city}`);
-      const res = await fetch(
-        `https://nominatim.openstreetmap.org/search?q=${query}&format=json&limit=1`,
-        { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }
-      );
-      if (res.status === 429) {
-        await new Promise(r => setTimeout(r, 800 * (attempt + 1)));
-        continue;
-      }
-      if (!res.ok) return null;
-      const data = (await res.json()) as any[];
-      if (!data || data.length === 0) {
-        // Retry with a simpler query (just the place name, no city).
-        if (attempt === 0) {
-          const fallbackQuery = encodeURIComponent(place);
-          const fallbackRes = await fetch(
-            `https://nominatim.openstreetmap.org/search?q=${fallbackQuery}&format=json&limit=1`,
-            { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }
-          );
-          if (fallbackRes.ok) {
-            const fallbackData = (await fallbackRes.json()) as any[];
-            if (fallbackData && fallbackData.length > 0) {
-              return {
-                lat: parseFloat(fallbackData[0].lat),
-                lon: parseFloat(fallbackData[0].lon),
-                displayName: fallbackData[0].display_name,
-              };
+  const runRequest = async () => {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const query = encodeURIComponent(`${place}, ${city}`);
+        const res = await fetch(
+          `https://nominatim.openstreetmap.org/search?q=${query}&format=json&limit=1`,
+          { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }
+        );
+        if (res.status === 429) {
+          await sleep(800 * (attempt + 1));
+          continue;
+        }
+        if (!res.ok) return null;
+        const data = (await res.json()) as any[];
+        if (!data || data.length === 0) {
+          // Retry with a simpler query (just the place name, no city).
+          if (attempt === 0) {
+            const fallbackQuery = encodeURIComponent(place);
+            const fallbackRes = await fetch(
+              `https://nominatim.openstreetmap.org/search?q=${fallbackQuery}&format=json&limit=1`,
+              { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }
+            );
+            if (fallbackRes.ok) {
+              const fallbackData = (await fallbackRes.json()) as any[];
+              if (fallbackData && fallbackData.length > 0) {
+                return {
+                  lat: parseFloat(fallbackData[0].lat),
+                  lon: parseFloat(fallbackData[0].lon),
+                  displayName: fallbackData[0].display_name,
+                };
+              }
             }
           }
+          return null;
         }
+        return {
+          lat: parseFloat(data[0].lat),
+          lon: parseFloat(data[0].lon),
+          displayName: data[0].display_name,
+        };
+      } catch {
         return null;
       }
-      return {
-        lat: parseFloat(data[0].lat),
-        lon: parseFloat(data[0].lon),
-        displayName: data[0].display_name,
-      };
-    } catch {
-      return null;
     }
-  }
-  return null;
+    return null;
+  };
+
+  const next = throttleQueue.then(async () => {
+    const elapsed = Date.now() - lastNominatimAt;
+    if (elapsed < NOMINATIM_DELAY_MS) {
+      await sleep(NOMINATIM_DELAY_MS - elapsed);
+    }
+    lastNominatimAt = Date.now();
+    return runRequest();
+  });
+  throttleQueue = next.catch(() => null).then(() => undefined);
+  return next;
+}
+
+export async function geocode(place: string, city: string): Promise<GeocodeResult | null> {
+  const queryKey = normalizeQueryKey(place, city);
+
+  const local = processCache.get(queryKey);
+  if (local) return local;
+
+  const existing = inFlight.get(queryKey);
+  if (existing) return existing;
+
+  const promise = (async () => {
+    const cached = await db
+      .select()
+      .from(geocodedLocations)
+      .where(eq(geocodedLocations.queryKey, queryKey))
+      .limit(1);
+    if (cached.length > 0) {
+      return {
+        lat: cached[0].lat,
+        lon: cached[0].lon,
+        displayName: cached[0].displayName || '',
+      };
+    }
+
+    const result = await geocodeNominatim(place, city);
+    if (result) {
+      try {
+        await db.insert(geocodedLocations).values({
+          queryKey,
+          lat: result.lat,
+          lon: result.lon,
+          displayName: result.displayName,
+        });
+      } catch (err) {
+        console.error('Failed to cache geocode result:', (err as Error).message);
+      }
+    }
+    return result;
+  })().finally(() => {
+    inFlight.delete(queryKey);
+  });
+
+  inFlight.set(queryKey, promise);
+  const result = await promise;
+  if (result) processCache.set(queryKey, result);
+  return result;
 }
 
 async function getOSRMRoute(

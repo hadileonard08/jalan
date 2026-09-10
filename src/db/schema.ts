@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, integer, decimal, timestamp, boolean, pgEnum, text, index } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, varchar, integer, decimal, timestamp, boolean, pgEnum, text, index, doublePrecision } from 'drizzle-orm/pg-core';
 
 export const dealCategoryEnum = pgEnum('deal_category', ['GOOD_DEAL', 'MAYBE_GOOD_DEAL', 'OKAY_DEAL', 'BAD_DEAL']);
 export const fareTypeEnum = pgEnum('fare_type', ['CASH', 'POINTS']);
@@ -125,3 +125,13 @@ export const dealAlerts = pgTable('deal_alerts', {
   userIdx: index('deal_alerts_user_id_idx').on(table.userId),
   activeIdx: index('deal_alerts_is_active_idx').on(table.isActive),
 }));
+
+// Geocoding cache for Nominatim/OpenStreetMap lookups.
+// Keyed by a normalized "landmark:city" string to avoid redundant API calls.
+export const geocodedLocations = pgTable('geocoded_locations', {
+  queryKey: text('query_key').primaryKey(),
+  lat: doublePrecision('lat').notNull(),
+  lon: doublePrecision('lon').notNull(),
+  displayName: text('display_name'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
