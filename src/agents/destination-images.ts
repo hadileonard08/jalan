@@ -123,6 +123,8 @@ const BAD_IMAGE_PATTERNS = [
 // threshold are likely not photos of the searched landmark.
 const MIN_RELEVANCE_SCORE = 0.5;
 const FETCH_TIMEOUT_MS = 5000;
+const VECTOR_IMAGE_SERVICE_URL = process.env.IMAGE_SEARCH_SERVICE_URL;
+const VECTOR_IMAGE_MIN_SCORE = parseFloat(process.env.VECTOR_IMAGE_MIN_SCORE || '0.15');
 const imageSearchCache = new Map<string, Promise<string | null>>();
 
 interface ImageCandidate {
@@ -373,11 +375,46 @@ async function raceImageProviders(searchTerm: string): Promise<string | null> {
   return accepted[0].url;
 }
 
-async function findImageForTerm(term: string, fallbackTerms: string[] = []): Promise<string | null> {
+async function getVectorImage(term: string): Promise<string | null> {
+  if (!VECTOR_IMAGE_SERVICE_URL) return null;
+  try {
+    const res = await fetch(`${VECTOR_IMAGE_SERVICE_URL}/search`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ search_term: term, limit: 3 }),
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as any[];
+    if (!Array.isArray(data) || data.length === 0) return null;
+    for (const result of data) {
+      const url = result?.image_url;
+      const score = Number(result?.similarity_score);
+      if (!url || Number.isNaN(score) || score < VECTOR_IMAGE_MIN_SCORE) continue;
+      if (isBadImageUrl(url)) continue;
+      return url;
+    }
+    return null;
+  } catch (error) {
+    console.log('Vector image search failed for', term, ':', (error as Error).message);
+    return null;
+  }
+}
+
+export async function findImageForTerm(
+  term: string,
+  fallbackTerms: string[] = [],
+  useVector = true
+): Promise<string | null> {
   if (!term) return null;
 
   const cleaned = cleanTerm(term);
   if (!cleaned) return null;
+
+  if (useVector && VECTOR_IMAGE_SERVICE_URL) {
+    const vectorUrl = await getVectorImage(cleaned);
+    if (vectorUrl) return vectorUrl;
+  }
 
   const knownAliases: Record<string, string[]> = {
     'sindhu night market': ['Pasar Sindhu Sanur Bali', 'Sanur Bali night market street food', 'Bali traditional food market'],

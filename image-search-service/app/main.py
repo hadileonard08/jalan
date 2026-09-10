@@ -99,7 +99,10 @@ async def _load_model() -> SentenceTransformer:
 def _download_image(url: str) -> Image.Image:
     """Download an image from a URL and return a decoded RGB PIL image."""
     try:
-        with httpx.Client(timeout=30.0, follow_redirects=True) as client:
+        headers = {
+            'User-Agent': 'Jalan Image Search/1.0 (https://jalan-ai.vercel.app)'
+        }
+        with httpx.Client(timeout=30.0, follow_redirects=True, headers=headers) as client:
             response = client.get(url)
             response.raise_for_status()
             image = Image.open(io.BytesIO(response.content)).convert("RGB")

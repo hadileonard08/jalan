@@ -124,3 +124,13 @@ Gather (one-time: weather, news, deals, destination image)
 - Transport and images run concurrently via `Promise.all()`.
 - All external fetches have 5s timeout (`AbortSignal.timeout`).
 
+## Image Vector Search Service
+
+A separate Python/FastAPI microservice lives in `image-search-service/` and provides CLIP-based semantic image search using `pgvector`.
+
+- Start the local service: `cd image-search-service && docker compose up -d app`
+- Default local URL: `http://127.0.0.1:8000`
+- Pre-seed images for landmarks: `IMAGE_SEARCH_SERVICE_URL=http://127.0.0.1:8000 npx tsx scripts/ingest-vectors.ts "Eiffel Tower" "Mount Fuji" ...`
+- Jalan will use `POST /search` automatically when `IMAGE_SEARCH_SERVICE_URL` is set and falls back to the lexical provider pipeline otherwise.
+- Minimum similarity threshold is controlled by `VECTOR_IMAGE_MIN_SCORE` (default `0.15`).
+
