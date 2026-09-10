@@ -129,7 +129,46 @@ const RANK_TIMEOUT_MS = 30000; // downloading + encoding several images takes lo
 const RANK_MIN_SCORE = parseFloat(process.env.VECTOR_IMAGE_MIN_SCORE || '0.22');
 const RANK_CANDIDATES_PER_PROVIDER = 3;
 const RANK_MAX_CANDIDATES = 9;
+const MIN_IMAGE_WIDTH = 500;
+const MIN_IMAGE_HEIGHT = 300;
 const imageSearchCache = new Map<string, Promise<string | null>>();
+
+// Common terms in image metadata/URLs that indicate motion blur, long exposure,
+// light trails, or other artistic effects that hurt clarity for travel photos.
+const BLURRY_WORDS = [
+  'long exposure',
+  'long_exposure',
+  'light trails',
+  'light_trails',
+  'traffic trails',
+  'traffic_trails',
+  'motion blur',
+  'motion_blur',
+  'blurred',
+  'blurry',
+  'trails',
+  'speed',
+  'zoom burst',
+  'abstract',
+  'silhouette',
+];
+
+function isBlurryImage(title: string, url: string, tags: string[] = []): boolean {
+  const text = `${title} ${url} ${tags.join(' ')}`.toLowerCase();
+  return BLURRY_WORDS.some((word) => text.includes(word));
+}
+
+function adjustImageScore(baseScore: number, title: string, url: string, width?: number, height?: number, tags: string[] = []): number {
+  let score = baseScore;
+  // Penalize motion blur / long-exposure artistic shots so we pick clear photos.
+  if (isBlurryImage(title, url, tags)) score *= 0.4;
+  // Slightly reward larger images so higher-resolution photos win ties.
+  if (width && height) {
+    const area = width * height;
+    if (area > 0) score += Math.log10(area) * 0.02;
+  }
+  return score;
+}
 
 interface ImageCandidate {
   url: string;
@@ -267,7 +306,7 @@ export function scoreImageRelevance(image: ImageMetadata, term: string, original
 // extremely tall/narrow images that are likely diagrams or signs.
 function hasGoodDimensions(width?: number, height?: number): boolean {
   if (!width || !height) return true; // If dimensions unknown, don't reject.
-  if (width < 200 || height < 150) return false;  // Too small.
+  if (width < MIN_IMAGE_WIDTH || height < MIN_IMAGE_HEIGHT) return false;  // Too small / not clear enough.
   if (height > width * 2) return false;  // Very tall — likely a sign/banner.
   return true;
 }
@@ -297,7 +336,7 @@ async function fetchWikimediaCommonsImages(term: string, maxResults = RANK_CANDI
   try {
     const headers = { 'User-Agent': 'flight-deal-dashboard/1.0 (image lookup)' };
     const searchRes = await fetch(
-      `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(term)}&gsrnamespace=6&gsrlimit=12&prop=imageinfo&iiprop=url|thumb|size&iiurlwidth=800&format=json&origin=*`,
+      `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(term)}&gsrnamespace=6&gsrlimit=12&prop=imageinfo&iiprop=url|thumb|size&iiurlwidth=1200&format=json&origin=*`,
       { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }
     );
     if (!searchRes.ok) return [];
@@ -317,7 +356,8 @@ async function fetchWikimediaCommonsImages(term: string, maxResults = RANK_CANDI
         const width = imageinfo[0]?.thumbwidth || imageinfo[0]?.width;
         const height = imageinfo[0]?.thumbheight || imageinfo[0]?.height;
         if (url && !isBadImageUrl(url) && hasGoodDimensions(width, height)) {
-          const score = scoreImageRelevance({ title: title || '', tags: [] }, term, rankIndex);
+          const baseScore = scoreImageRelevance({ title: title || '', tags: [] }, term, rankIndex);
+          const score = adjustImageScore(baseScore, title || '', url, width, height);
           candidates.push({ url, title: title || '', score, width, height });
         }
       }
@@ -537,7 +577,8 @@ async function fetchOpenverseImages(term: string, maxResults = RANK_CANDIDATES_P
       if (!candidateUrl) continue;
       if (!hasGoodDimensions(width, height)) continue;
 
-      const score = scoreImageRelevance({ title, tags }, term, rankIndex);
+      const baseScore = scoreImageRelevance({ title, tags }, term, rankIndex);
+      const score = adjustImageScore(baseScore, title, candidateUrl, width, height, tags);
       candidates.push({ url: candidateUrl, title, score, width, height });
     }
 
@@ -579,12 +620,14 @@ async function fetchPexelsImages(term: string, maxResults = RANK_CANDIDATES_PER_
 
     for (let rankIndex = 0; rankIndex < data.photos.length; rankIndex++) {
       const photo = data.photos[rankIndex];
-      const url = photo.src?.large || photo.src?.medium || photo.src?.small || photo.src?.original;
+      // Prefer the highest-quality source available so images look crisp on high-DPI screens.
+      const url = photo.src?.original || photo.src?.large2x || photo.src?.large || photo.src?.landscape || photo.src?.medium || photo.src?.small;
       const alt = photo.alt || '';
       const width = photo.width;
       const height = photo.height;
       if (url && !isBadImageUrl(url) && hasGoodDimensions(width, height)) {
-        const score = scoreImageRelevance({ title: alt, tags: [] }, term, rankIndex);
+        const baseScore = scoreImageRelevance({ title: alt, tags: [] }, term, rankIndex);
+        const score = adjustImageScore(baseScore, alt, url, width, height);
         candidates.push({ url, alt, score, width, height });
       }
     }
