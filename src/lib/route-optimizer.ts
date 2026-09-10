@@ -49,7 +49,8 @@ async function getOSRMDurationMatrix(stops: MapPoint[]): Promise<number[][] | nu
 
 /**
  * Solve a small TSP within a single time window using a nearest-neighbor
- * heuristic starting from the last stop of the previous window (if any).
+ * heuristic starting from the last stop of the previous window (if any),
+ * followed by a 2-opt improvement pass.
  *
  * @param windowStops  Stops in the current time window (unordered).
  * @param matrix       Full duration matrix for all stops.
@@ -98,7 +99,68 @@ function optimizeWindow(
     ordered.push(remaining.splice(best, 1)[0]);
   }
 
-  return ordered;
+  // 2-opt improvement pass: try reversing segments to reduce total travel time.
+  // The first stop is anchored (it was chosen as closest to the previous window)
+  // so we only optimize the segment from index 1 onward.
+  return twoOptImprove(ordered, matrix, startIndex);
+}
+
+/**
+ * 2-opt improvement: iteratively reverse segments of the route if doing so
+ * reduces the total travel time. The first element is kept fixed when an
+ * anchor index is provided (it was chosen to connect to the previous window).
+ */
+function twoOptImprove(
+  route: { stop: OptimizableStop; matrixIdx: number }[],
+  matrix: number[][],
+  anchorIndex: number,
+): { stop: OptimizableStop; matrixIdx: number }[] {
+  if (route.length <= 2) return route;
+
+  let improved = true;
+  let bestRoute = [...route];
+
+  // Compute total route duration including the anchor→first leg.
+  const routeDuration = (r: { matrixIdx: number }[]): number => {
+    let total = 0;
+    if (anchorIndex >= 0 && r.length > 0) {
+      const t = matrix[anchorIndex][r[0].matrixIdx];
+      if (typeof t === 'number') total += t;
+    }
+    for (let i = 0; i < r.length - 1; i++) {
+      const t = matrix[r[i].matrixIdx][r[i + 1].matrixIdx];
+      if (typeof t === 'number') total += t;
+    }
+    return total;
+  };
+
+  let bestDuration = routeDuration(bestRoute);
+  const maxIterations = 50;
+
+  for (let iter = 0; iter < maxIterations && improved; iter++) {
+    improved = false;
+    // Try all segment reversals (i, j) with i < j. Keep index 0 fixed when
+    // anchored (it connects to the previous window). When not anchored, we
+    // can also try moving the start.
+    const startIdx = anchorIndex >= 0 ? 1 : 0;
+    for (let i = startIdx; i < bestRoute.length - 1; i++) {
+      for (let j = i + 1; j < bestRoute.length; j++) {
+        const candidate = [
+          ...bestRoute.slice(0, i),
+          ...bestRoute.slice(i, j + 1).reverse(),
+          ...bestRoute.slice(j + 1),
+        ];
+        const candidateDuration = routeDuration(candidate);
+        if (candidateDuration < bestDuration) {
+          bestRoute = candidate;
+          bestDuration = candidateDuration;
+          improved = true;
+        }
+      }
+    }
+  }
+
+  return bestRoute;
 }
 
 /**

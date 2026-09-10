@@ -829,7 +829,11 @@ Requirements:
   **🌅 Morning:** <activities and stops>
   **🌞 Afternoon:** <activities and stops>
   **🌙 Evening:** <activities and stops>
-  Every stop/landmark must fall under exactly one of these three time blocks. Schedule museums, galleries, and outdoor attractions in the Morning or Afternoon (when they are open). Reserve Evening for dinner, nightlife, illuminated landmarks, and evening walks. Never schedule a museum or gallery visit in the Evening block.
+  Every stop/landmark must fall under exactly one of these three time blocks. Strict time-of-day rules:
+  - Morning (09:00–12:00): museums, galleries, shrines, temples, gardens, breakfast spots, morning markets, and attractions that open at 9–10 AM. NEVER schedule a night market or rooftop bar in the Morning.
+  - Afternoon (13:00–17:00): museums, galleries, palaces, parks, lunch restaurants, and attractions with standard 09:00–17:00 operating hours. NEVER schedule a night market or nightlife venue in the Afternoon.
+  - Evening (18:00–22:00): night markets, rooftop bars, sunset observatories, illuminated landmarks, dinner restaurants, nightlife, and evening walks. NEVER schedule a standard museum, gallery, shrine, or garden in the Evening — these venues are typically closed after 17:00.
+  If a venue is open only at night (night market, rooftop bar, observatory), it MUST go in the Evening block. If a venue closes at 17:00 (museum, gallery, shrine), it MUST go in the Morning or Afternoon block.
 - Bold every landmark, neighborhood, or major stop you mention in the day plan (e.g. **Louvre Museum**, **Montmartre**, **Eiffel Tower**). This is used to generate walking/transit maps.
 - Do not claim upgrades, partner airlines, or premium in-flight services unless cabin is BUSINESS/FIRST.
 - Do not invent traveler names.
