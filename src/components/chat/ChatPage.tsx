@@ -708,16 +708,12 @@ export default function ChatPage() {
     if (messagesRef.current) messagesRef.current.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  // When loading starts, scroll to top so the user reads from the start.
+  // When the first assistant response finishes, scroll to the top so the user
+  // sees the itinerary from the beginning and can scroll down. Don't do this on
+  // follow-up turns so the chat stays near the latest user/assistant exchange.
   useEffect(() => {
-    if (isLoading) scrollToTop();
-  }, [isLoading]);
-
-  // When streaming finishes, scroll to top so the user sees the itinerary
-  // from the beginning, not the end.
-  useEffect(() => {
-    if (!isLoading && messages.length > 0) scrollToTop();
-  }, [isLoading]);
+    if (!isLoading && messages.length === 2) scrollToTop();
+  }, [isLoading, messages.length]);
 
   const loadConversation = useCallback(async (id: string) => {
     setActiveConversationId(id);
