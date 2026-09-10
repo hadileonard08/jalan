@@ -38,6 +38,15 @@ class SearchResult(BaseModel):
     similarity_score: float
 
 
+class BatchIngestItem(BaseModel):
+    image_url: HttpUrl
+    location_name: str = Field(..., min_length=1)
+
+
+class BatchIngestRequest(BaseModel):
+    items: List[BatchIngestItem] = Field(..., min_length=1, max_length=16)
+
+
 def vector_to_db_str(vector: np.ndarray) -> str:
     """Convert a 1-D float vector into pgvector text representation."""
     flat = np.asarray(vector, dtype=float).flatten()
@@ -162,6 +171,51 @@ def _insert_image(image_url: str, location_name: str, vector: np.ndarray) -> int
         conn.close()
 
 
+def _ingest_batch(image_urls: List[str], location_names: List[str]) -> dict:
+    """Download and vectorize a batch of images, then insert them into pgvector."""
+    if model is None:
+        raise RuntimeError("Model is not loaded")
+
+    images: List[Image.Image] = []
+    valid_urls: List[str] = []
+    valid_locations: List[str] = []
+
+    for url, location in zip(image_urls, location_names):
+        try:
+            img = _download_image(url)
+            images.append(img)
+            valid_urls.append(url)
+            valid_locations.append(location)
+        except Exception as exc:
+            logger.warning("Skipping image %s: %s", url, exc)
+
+    if not images:
+        return {"ingested": 0, "failed": len(image_urls)}
+
+    # Batch encoding is much faster than one-by-one.
+    vectors = model.encode(images, show_progress_bar=False)
+    vector_strs = [vector_to_db_str(v) for v in vectors]
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.executemany(
+                """
+                INSERT INTO destination_photos (image_url, location_name, image_vector)
+                VALUES (%s, %s, %s::vector)
+                ON CONFLICT (image_url) DO UPDATE SET
+                    location_name = EXCLUDED.location_name,
+                    image_vector = EXCLUDED.image_vector;
+                """,
+                list(zip(valid_urls, valid_locations, vector_strs)),
+            )
+            conn.commit()
+    finally:
+        conn.close()
+
+    return {"ingested": len(valid_urls), "failed": len(image_urls) - len(valid_urls)}
+
+
 def _search_images(vector: np.ndarray, limit: int) -> List[SearchResult]:
     """Return the nearest images for a text vector using cosine distance."""
     vector_str = vector_to_db_str(vector)
@@ -230,6 +284,19 @@ async def ingest(request: IngestRequest):
         _insert_image, image_url, request.location_name, vector
     )
     return {"status": "success", "id": inserted_id, "image_url": image_url}
+
+
+@app.post("/batch-ingest", status_code=status.HTTP_201_CREATED)
+async def batch_ingest(request: BatchIngestRequest):
+    """Vectorize a batch of images and store them in the pgvector database."""
+    image_urls = [str(item.image_url) for item in request.items]
+    location_names = [item.location_name for item in request.items]
+    result = await anyio.to_thread.run_sync(_ingest_batch, image_urls, location_names)
+    return {
+        "status": "success",
+        "ingested": result["ingested"],
+        "failed": result["failed"],
+    }
 
 
 @app.post("/search", response_model=List[SearchResult])
