@@ -1,12 +1,13 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, Suspense } from 'react';
 import dynamic from 'next/dynamic';
-import { useParams } from 'next/navigation';
+import { useParams, useSearchParams, useRouter } from 'next/navigation';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { List, X } from 'lucide-react';
+import { List, X, Bookmark, Check, Loader2 } from 'lucide-react';
 import WalkersIcon from '@/components/WalkersIcon';
+import { useUser, SignInButtonWrapper } from '@/components/AuthProvider';
 import type { DayTransport } from '@/agents/transport';
 
 const DailyRouteMap = dynamic(() => import('@/components/chat/DailyRouteMap'), {
@@ -154,14 +155,28 @@ function SharedDailyRouteMap({ days }: { days: DayTransport[] }) {
   );
 }
 
-export default function SharedTripPage() {
+export default function SharedTripPageWrapper() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-gray-50 dark:bg-gray-900" />}>
+      <SharedTripPage />
+    </Suspense>
+  );
+}
+
+function SharedTripPage() {
   const params = useParams();
   const id = params.id as string;
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const { isLoaded, isSignedIn } = useUser();
   const [trip, setTrip] = useState<SharedTripData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [sectionsOpen, setSectionsOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [showToast, setShowToast] = useState(false);
   const scrollRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -182,6 +197,67 @@ export default function SharedTripPage() {
     }
     fetchTrip();
   }, [id]);
+
+  // Auto-save when action=save is present and user is authenticated.
+  useEffect(() => {
+    if (!isLoaded || !isSignedIn || !trip || saving || saved) return;
+    if (searchParams.get('action') !== 'save') return;
+
+    setSaving(true);
+    fetch('/api/saved-trips', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        conversationId: '',
+        destination: trip.destination || trip.title || 'Shared Trip',
+        dates: trip.payload?.entities?.startDate
+          ? `${trip.payload.entities.startDate}${trip.payload.entities.endDate ? ` - ${trip.payload.entities.endDate}` : ''}`
+          : 'Dates TBD',
+        payload: trip.payload,
+      }),
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error('Failed to save');
+        return res.json();
+      })
+      .then(() => {
+        setSaved(true);
+        setShowToast(true);
+        setTimeout(() => setShowToast(false), 4000);
+        // Clear the query parameter.
+        router.replace(`/share/${id}`);
+      })
+      .catch(() => {
+        setSaving(false);
+      });
+  }, [isLoaded, isSignedIn, trip, searchParams, router, id, saving, saved]);
+
+  const handleSaveTrip = async () => {
+    if (!trip || saving || saved) return;
+    setSaving(true);
+    try {
+      const res = await fetch('/api/saved-trips', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          conversationId: '',
+          destination: trip.destination || trip.title || 'Shared Trip',
+          dates: trip.payload?.entities?.startDate
+            ? `${trip.payload.entities.startDate}${trip.payload.entities.endDate ? ` - ${trip.payload.entities.endDate}` : ''}`
+            : 'Dates TBD',
+          payload: trip.payload,
+        }),
+      });
+      if (!res.ok) throw new Error('Failed to save');
+      setSaved(true);
+      setShowToast(true);
+      setTimeout(() => setShowToast(false), 4000);
+    } catch {
+      // ignore
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(window.location.href);
@@ -455,13 +531,42 @@ export default function SharedTripPage() {
           )}
 
           {/* Footer */}
-          <div className="text-center mt-8 mb-4">
-            <p className="text-gray-400 dark:text-gray-500 text-sm mb-3">Want a trip like this?</p>
+          <div className="text-center mt-8 mb-4 space-y-3">
+            {/* Save to My One Stop CTA */}
+            {isLoaded && isSignedIn ? (
+              <button
+                onClick={handleSaveTrip}
+                disabled={saving || saved}
+                className={`inline-flex items-center gap-2 font-medium px-5 py-2.5 rounded-xl transition-colors ${
+                  saved
+                    ? 'bg-green-600 text-white cursor-default'
+                    : 'bg-blue-600 text-white hover:bg-blue-700'
+                } disabled:opacity-70`}
+              >
+                {saving ? (
+                  <Loader2 size={20} className="animate-spin" />
+                ) : saved ? (
+                  <Check size={20} />
+                ) : (
+                  <Bookmark size={20} />
+                )}
+                {saving ? 'Saving...' : saved ? 'Saved to One Stop!' : 'Save to My One Stop'}
+              </button>
+            ) : isLoaded && !isSignedIn ? (
+              <SignInButtonWrapper fallbackRedirectUrl={`${window.location.pathname}?action=save`}>
+                <span className="inline-flex items-center gap-2 bg-blue-600 text-white font-medium px-5 py-2.5 rounded-xl hover:bg-blue-700 transition-colors cursor-pointer">
+                  <Bookmark size={20} />
+                  Sign in to Save to One Stop
+                </span>
+              </SignInButtonWrapper>
+            ) : null}
+
+            <p className="text-gray-400 dark:text-gray-500 text-sm">Want a trip like this?</p>
             <a
               href="/"
-              className="inline-flex items-center gap-2 bg-blue-600 text-white font-medium px-5 py-2.5 rounded-xl hover:bg-blue-700 transition-colors"
+              className="inline-flex items-center gap-2 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-200 font-medium px-5 py-2.5 rounded-xl hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
             >
-              <WalkersIcon className="text-white" size={20} />
+              <WalkersIcon className="text-gray-600 dark:text-gray-300" size={20} />
               Plan your own trip with Jalan
             </a>
           </div>
@@ -505,6 +610,14 @@ export default function SharedTripPage() {
           </div>
         )}
       </div>
+
+      {/* Success toast */}
+      {showToast && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-green-600 text-white px-5 py-3 rounded-xl shadow-lg flex items-center gap-2 animate-in fade-in slide-in-from-bottom duration-300">
+          <Check size={18} />
+          <span className="text-sm font-medium">Trip saved to your One Stop panel!</span>
+        </div>
+      )}
     </div>
   );
 }
