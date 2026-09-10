@@ -7,7 +7,7 @@ const PEXELS_API_KEY = process.env.PEXELS_API_KEY;
 // Tuned to keep memory and per-provider rate limits sane while maximizing diversity.
 const BATCH_SIZE = 16;
 const PER_SOURCE = 3; // only a few per term per source — avoids 100 pictures of the same temple
-const SLEEP_MS = 250; // polite cadence across the three sources
+const SLEEP_MS = 120; // small pause between search terms
 
 // Diverse search variants per destination. This spreads the corpus across cityscapes,
 // landmarks, food markets, nature, and architecture instead of one bucket per city.
@@ -188,28 +188,21 @@ async function fetchPexelsUrls(term: string, limit: number): Promise<Candidate[]
 }
 
 async function fetchAllUrls(term: string, limit: number): Promise<Candidate[]> {
-  // Race the three sources in parallel. Keep per-source limits low to diversify.
-  const [wiki, openverse, pexels] = await Promise.all([
-    fetchWikimediaUrls(term, limit),
-    fetchOpenverseUrls(term, limit),
-    PEXELS_API_KEY ? fetchPexelsUrls(term, limit) : Promise.resolve([]),
-  ]);
+  // Start with the fastest, most reliable source (Wikimedia Commons).
+  const candidates = await fetchWikimediaUrls(term, limit);
+  if (candidates.length >= limit) return candidates.slice(0, limit);
 
-  // Interleave sources so no single source dominates the queue.
-  const candidates: Candidate[] = [];
-  const sources = [wiki, openverse, pexels].filter(s => s.length > 0);
-  let i = 0;
-  while (candidates.length < limit) {
-    let addedThisRound = false;
-    for (const source of sources) {
-      if (source[i]) {
-        candidates.push(source[i]);
-        addedThisRound = true;
-      }
-    }
-    if (!addedThisRound) break;
-    i++;
+  // Fall back to Openverse only if Wikimedia didn't have enough for this term.
+  const openverse = await fetchOpenverseUrls(term, limit - candidates.length);
+  candidates.push(...openverse);
+  if (candidates.length >= limit) return candidates.slice(0, limit);
+
+  // Fall back to Pexels last, if configured.
+  if (PEXELS_API_KEY) {
+    const pexels = await fetchPexelsUrls(term, limit - candidates.length);
+    candidates.push(...pexels);
   }
+
   return candidates.slice(0, limit);
 }
 
