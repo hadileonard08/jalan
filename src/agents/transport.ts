@@ -50,6 +50,11 @@ function transitTermToMode(name: string): { mode: string; note: string } | null 
   return { mode: '🚇 Transit', note: 'Take local transit to the next stop' };
 }
 
+export interface MapPoint {
+  lat: number;
+  lon: number;
+}
+
 export interface LegInfo {
   from: string;
   to: string;
@@ -60,11 +65,18 @@ export interface LegInfo {
   note: string;
 }
 
+export interface RouteWaypoint extends MapPoint {
+  name: string;
+  order: number;
+}
+
 export interface DayTransport {
   day: string;
   title: string;
   legs: LegInfo[];
   summary: string;
+  waypoints: RouteWaypoint[];
+  polyline?: MapPoint[];
 }
 
 export interface TransportPlan {
@@ -207,17 +219,19 @@ async function getOSRMRoute(
   from: GeocodeResult,
   to: GeocodeResult,
   profile: 'walking' | 'driving'
-): Promise<{ durationMin: number; distanceKm: number } | null> {
+): Promise<{ durationMin: number; distanceKm: number; coordinates: MapPoint[] } | null> {
   try {
-    const url = `https://router.project-osrm.org/route/v1/${profile}/${from.lon},${from.lat};${to.lon},${to.lat}?overview=false`;
+    const url = `https://router.project-osrm.org/route/v1/${profile}/${from.lon},${from.lat};${to.lon},${to.lat}?overview=full&geometries=geojson`;
     const res = await fetch(url, { headers: { 'User-Agent': 'flight-deal-dashboard/1.0' }, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
     if (!res.ok) return null;
     const data = (await res.json()) as any;
     if (!data.routes || data.routes.length === 0) return null;
     const route = data.routes[0];
+    const coordinates: MapPoint[] = (route.geometry?.coordinates || []).map((c: [number, number]) => ({ lat: c[1], lon: c[0] }));
     return {
       durationMin: Math.round(route.duration / 60),
       distanceKm: Math.round((route.distance / 1000) * 10) / 10,
+      coordinates,
     };
   } catch {
     return null;
@@ -295,11 +309,27 @@ async function buildDayTransport(
     .filter(Boolean);
 
   const legs: LegInfo[] = [];
+  const dayPolyline: MapPoint[] = [];
+  const waypoints: RouteWaypoint[] = [];
 
   // Geocode all stops in parallel (with a small concurrency limit).
   const geocoded = await Promise.all(
     segments.map((s) => geocode(s, destination))
   );
+
+  // Build waypoints from successfully geocoded, non-generic stops.
+  for (let i = 0; i < geocoded.length; i++) {
+    const g = geocoded[i];
+    const name = segments[i];
+    if (g && !isGenericTransitTerm(name)) {
+      waypoints.push({
+        name,
+        lat: g.lat,
+        lon: g.lon,
+        order: waypoints.length + 1,
+      });
+    }
+  }
 
   // Get OSRM routes between consecutive stops.
   for (let i = 0; i < geocoded.length - 1; i++) {
@@ -345,6 +375,20 @@ async function buildDayTransport(
       getOSRMRoute(from, to, 'driving').catch(() => null),
     ]);
     const routeDistance = walkResult?.distanceKm ?? drive?.distanceKm ?? null;
+
+    // Append the OSRM geometry to the day's polyline, preferring the driving shape.
+    const legPolyline = drive?.coordinates?.length
+      ? drive.coordinates
+      : (walkResult?.coordinates?.length ? walkResult.coordinates : null);
+    if (legPolyline) {
+      if (i === 0) {
+        dayPolyline.push(...legPolyline);
+      } else {
+        // Avoid duplicating the shared waypoint between consecutive legs.
+        dayPolyline.push(...legPolyline.slice(1));
+      }
+    }
+
     if (routeDistance !== null && routeDistance > 100) {
       legs.push({
         from: fromName,
@@ -391,6 +435,8 @@ async function buildDayTransport(
     title: routeLink.title || '',
     legs,
     summary,
+    waypoints,
+    polyline: dayPolyline.length > 0 ? dayPolyline : undefined,
   };
 }
 

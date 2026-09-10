@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
+import dynamic from 'next/dynamic';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Send, Plane, Loader2, History, Plus, LogIn, MapPin, Calendar, Sun, Wind, Droplets, Briefcase, Trash2, Bookmark, Map, Menu, X, List, Navigation, Share2, ChevronLeft, ChevronRight, Image as ImageIcon } from 'lucide-react';
@@ -11,6 +12,12 @@ import type { ChatMessageUI, ChatPayload, SavedTrip, RouteLink } from '@/lib/cha
 import OneStopPanel from './OneStopPanel';
 import ThemeToggle from '@/components/ThemeToggle';
 import WalkersIcon from '@/components/WalkersIcon';
+import type { DayTransport } from '@/agents/transport';
+
+const DailyRouteMap = dynamic(() => import('./DailyRouteMap'), {
+  ssr: false,
+  loading: () => <div className="w-full h-72 rounded-2xl bg-gray-100 dark:bg-[#2c2c2e] animate-pulse" />,
+});
 
 interface Conversation {
   id: string;
@@ -160,13 +167,43 @@ function DealsList({ deals }: { deals?: any[] }) {
   );
 }
 
-function RouteLinks({ routeLinks }: { routeLinks?: RouteLink[] }) {
+function RouteLinks({ routeLinks, transportPlan }: { routeLinks?: RouteLink[]; transportPlan?: { days?: DayTransport[] } }) {
   if (!routeLinks || routeLinks.length === 0) return null;
+
+  const [activeDay, setActiveDay] = useState(
+    transportPlan?.days?.[0]?.day || routeLinks[0]?.day || '1'
+  );
+  const activeDayData = transportPlan?.days?.find((d) => d.day === activeDay);
+
   return (
     <div id="section-routes" className="my-3 scroll-mt-24">
       <div className="flex items-center gap-2 text-gray-700 dark:text-gray-200 font-semibold mb-2">
         <Map size={18} /> Daily Routes
       </div>
+
+      {transportPlan?.days && transportPlan.days.length > 0 && (
+        <div className="bg-white/90 dark:bg-[#1c1c1e] border border-black/[0.08] dark:border-white/[0.1] rounded-2xl p-4 mb-3 shadow-sm">
+          <div className="flex gap-2 mb-3 overflow-x-auto pb-1 scrollbar-hide">
+            {transportPlan.days.map((d) => (
+              <button
+                key={d.day}
+                onClick={() => setActiveDay(d.day)}
+                className={`flex-shrink-0 px-3 py-1.5 rounded-full text-sm font-medium border transition-colors ${
+                  activeDay === d.day
+                    ? 'bg-blue-600 text-white border-blue-600'
+                    : 'bg-white dark:bg-[#2c2c2e] text-gray-700 dark:text-gray-200 border-black/[0.05] dark:border-white/[0.1] hover:border-blue-500/40'
+                }`}
+              >
+                Day {d.day}
+              </button>
+            ))}
+          </div>
+          {activeDayData && (
+            <DailyRouteMap waypoints={activeDayData.waypoints} polyline={activeDayData.polyline} />
+          )}
+        </div>
+      )}
+
       <div className="grid gap-2">
         {routeLinks.map((link, i) => (
           <a
@@ -470,7 +507,7 @@ function RichPayload({ payload, onSaveTrip, onShare, shareUrl, isSignedIn }: { p
       </div>
       <TransportCard transportPlan={payload.transportPlan} />
       <DealsList deals={payload.deals} />
-      <RouteLinks routeLinks={payload.routeLinks} />
+      <RouteLinks routeLinks={payload.routeLinks} transportPlan={payload.transportPlan} />
       {hasSavableContent ? (
         <div className="flex justify-end gap-2 flex-wrap pt-4 border-t border-black/[0.05] dark:border-white/[0.1]">
           {shareUrl ? (

@@ -1,11 +1,18 @@
 'use client';
 
 import { useEffect, useState, useRef } from 'react';
+import dynamic from 'next/dynamic';
 import { useParams } from 'next/navigation';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { List, X } from 'lucide-react';
 import WalkersIcon from '@/components/WalkersIcon';
+import type { DayTransport } from '@/agents/transport';
+
+const DailyRouteMap = dynamic(() => import('@/components/chat/DailyRouteMap'), {
+  ssr: false,
+  loading: () => <div className="w-full h-72 rounded-2xl bg-gray-100 dark:bg-gray-700 animate-pulse" />,
+});
 
 interface SharedTripData {
   id: string;
@@ -118,6 +125,33 @@ function extractHeadings(markdown: string): { id: string; label: string; level: 
     headings.push({ id: slug(label), label, level });
   }
   return headings;
+}
+
+// Inline day-toggle + Leaflet map for the shared trip page.
+function SharedDailyRouteMap({ days }: { days: DayTransport[] }) {
+  const [activeDay, setActiveDay] = useState(days[0]?.day || '1');
+  const activeDayData = days.find((d) => d.day === activeDay) || days[0];
+  if (!activeDayData) return null;
+  return (
+    <div className="mb-3">
+      <div className="flex gap-2 mb-3 overflow-x-auto pb-1 scrollbar-hide">
+        {days.map((d) => (
+          <button
+            key={d.day}
+            onClick={() => setActiveDay(d.day)}
+            className={`flex-shrink-0 px-3 py-1.5 rounded-full text-sm font-medium border transition-colors ${
+              activeDay === d.day
+                ? 'bg-blue-600 text-white border-blue-600'
+                : 'bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-200 border-gray-200 dark:border-gray-600 hover:border-blue-300'
+            }`}
+          >
+            Day {d.day}
+          </button>
+        ))}
+      </div>
+      <DailyRouteMap waypoints={activeDayData.waypoints} polyline={activeDayData.polyline} />
+    </div>
+  );
 }
 
 export default function SharedTripPage() {
@@ -394,7 +428,12 @@ export default function SharedTripPage() {
                   <div className="flex items-center gap-2 text-gray-700 dark:text-gray-200 font-semibold mb-3">
                     🗺️ Daily Routes
                   </div>
-                  <div className="grid gap-2">
+
+                  {trip.payload.transportPlan?.days?.length > 0 && (
+                    <SharedDailyRouteMap days={trip.payload.transportPlan.days} />
+                  )}
+
+                  <div className="grid gap-2 mt-3">
                     {trip.payload.routeLinks.map((link: any, i: number) => (
                       <a
                         key={i}

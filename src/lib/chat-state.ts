@@ -19,6 +19,8 @@ export interface ClarifyingQuestion {
   examples: string[];
 }
 
+import type { TransportPlan } from '../agents/transport';
+
 export interface RouteLink {
   day: string;
   title: string;
@@ -34,7 +36,7 @@ export interface ChatPayload {
   images?: Record<string, string>;
   itinerary?: string;
   routeLinks?: RouteLink[];
-  transportPlan?: any;
+  transportPlan?: TransportPlan;
   packingTips?: string;
   feedback?: string[];
 }
