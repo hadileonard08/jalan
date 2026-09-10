@@ -134,7 +134,7 @@ async function fetchOpenverseUrls(term: string, limit: number): Promise<Candidat
       `https://api.openverse.org/v1/images/?q=${encodeURIComponent(term)}&page_size=${Math.min(limit * 2, 20)}`,
       {
         headers: { 'User-Agent': 'Jalan Image Search/1.0 (seed)' },
-        signal: AbortSignal.timeout(5000),
+        signal: AbortSignal.timeout(1500),
       }
     );
     if (!res.ok) return [];
