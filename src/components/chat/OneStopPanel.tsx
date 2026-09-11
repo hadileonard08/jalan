@@ -414,7 +414,7 @@ function FlightsDocsTab({ trip, onUpdate }: { trip: SavedTrip; onUpdate: (trip: 
               <X size={16} />
             </button>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="text-[13px] text-gray-500 dark:text-gray-400 mb-1 block">Type</label>
               <select
@@ -693,12 +693,12 @@ function SavedTripCard({ trip, onUpdate, onDelete }: { trip: SavedTrip; onUpdate
         </div>
       </div>
 
-      <div className="flex overflow-x-auto border-b border-gray-200 dark:border-gray-700">
+      <div className="flex overflow-x-auto scrollbar-hide border-b border-gray-200 dark:border-gray-700 -mx-4 px-4 md:mx-0 md:px-0">
         {(['itinerary', 'routes', 'flights', 'packing', 'todos', 'notes'] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
-            className={`flex-1 px-3 py-2 text-[13px] font-medium capitalize whitespace-nowrap ${
+            className={`flex-shrink-0 px-4 py-3 md:py-2 md:flex-1 text-[13px] font-medium capitalize whitespace-nowrap min-h-[44px] flex items-center justify-center ${
               activeTab === tab ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-600 bg-blue-50 dark:bg-blue-900/20' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/50'
             }`}
           >
@@ -707,7 +707,7 @@ function SavedTripCard({ trip, onUpdate, onDelete }: { trip: SavedTrip; onUpdate
         ))}
       </div>
 
-      <div className="p-4">
+      <div className="p-3 md:p-4">
         {activeTab === 'itinerary' && (
           <ItineraryTab trip={trip} onUpdate={onUpdate} />
         )}
@@ -966,22 +966,23 @@ export default function OneStopPanel({ isOpen, onClose, savedTrips, setSavedTrip
       ) : null}
 
       <div
-        className={`fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 transition-opacity duration-300 ${
+        className={`fixed inset-0 z-50 flex items-stretch md:items-center justify-center p-0 md:p-4 transition-opacity duration-300 ${
           isOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
         }`}
       >
         <div
-          className={`w-full sm:w-[95vw] h-[92dvh] sm:h-[90vh] max-w-[1000px] max-h-[900px] bg-white/95 dark:bg-[#1c1c1e]/95 backdrop-blur-2xl backdrop-saturate-[1.8] border border-black/[0.05] dark:border-white/[0.1] shadow-[0_-12px_40px_rgba(0,0,0,0.16),0_20px_70px_rgba(0,0,0,0.2)] rounded-t-[24px] sm:rounded-[20px] flex flex-col transform transition-all duration-300 ease-out overflow-hidden ${
-            isOpen ? 'translate-y-0 scale-100' : 'translate-y-6 sm:translate-y-0 sm:scale-95'
+          className={`w-full md:w-[95vw] h-[100dvh] md:h-[90vh] max-w-none md:max-w-[1000px] max-h-none md:max-h-[900px] bg-white/95 dark:bg-[#1c1c1e]/95 backdrop-blur-2xl backdrop-saturate-[1.8] border-0 md:border border-black/[0.05] dark:border-white/[0.1] shadow-none md:shadow-[0_-12px_40px_rgba(0,0,0,0.16),0_20px_70px_rgba(0,0,0,0.2)] rounded-none md:rounded-[20px] flex flex-col transform transition-all duration-300 ease-out overflow-hidden ${
+            isOpen ? 'translate-y-0 scale-100' : 'translate-y-4 md:translate-y-0 md:scale-95'
           }`}
         >
-          <div className="sm:hidden pt-2.5 flex justify-center">
+          {/* Mobile drag handle (hidden on desktop) */}
+          <div className="md:hidden pt-2 pb-1 flex justify-center flex-shrink-0">
             <div className="w-10 h-1.5 bg-gray-300 dark:bg-gray-600 rounded-full" />
           </div>
-          <div className="px-5 py-3 border-b border-black/[0.05] dark:border-white/[0.1] flex items-center justify-between bg-white/70 dark:bg-[#1c1c1e]/70">
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-2 font-semibold text-gray-900 dark:text-gray-100">
-                <Plane size={22} className="text-blue-600" /> One Stop
+          <div className="px-4 md:px-5 py-2 md:py-3 border-b border-black/[0.05] dark:border-white/[0.1] flex items-center justify-between bg-white/70 dark:bg-[#1c1c1e]/70 flex-shrink-0">
+            <div className="flex items-center gap-2 md:gap-4 min-w-0">
+              <div className="flex items-center gap-2 font-semibold text-gray-900 dark:text-gray-100 flex-shrink-0">
+                <Plane size={20} className="text-blue-600" /> <span className="hidden sm:inline">One Stop</span>
               </div>
               {isSignedIn && (
                 <div className="flex gap-1 ml-2">
@@ -1018,7 +1019,7 @@ export default function OneStopPanel({ isOpen, onClose, savedTrips, setSavedTrip
 
           {view === 'alerts' ? (
             /* --- Alerts View --- */
-            <div className="flex-1 overflow-y-auto p-6">
+            <div className="flex-1 overflow-y-auto p-4 md:p-6">
               {!isSignedIn ? (
                 <div className="text-center text-gray-500 dark:text-gray-400 py-16">
                   <Bell size={32} className="mx-auto mb-3 text-gray-300 dark:text-gray-600" />
@@ -1033,7 +1034,7 @@ export default function OneStopPanel({ isOpen, onClose, savedTrips, setSavedTrip
                       <Bell size={16} className="text-blue-600" /> Create New Alert
                     </h3>
                     <p className="text-[13px] text-gray-500 dark:text-gray-400 mb-3">We'll email you when a new GOOD_DEAL matches your criteria. Leave fields blank for "any".</p>
-                    <div className="grid grid-cols-2 gap-3 mb-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
                       <div>
                         <label className="text-[13px] text-gray-500 dark:text-gray-400 mb-1 block">Origin (IATA)</label>
                         <input
@@ -1175,51 +1176,68 @@ export default function OneStopPanel({ isOpen, onClose, savedTrips, setSavedTrip
             </div>
           ) : savedTrips.length === 1 ? (
             /* --- Trips View (single trip) --- */
-            <div className="flex-1 overflow-y-auto p-6">
+            <div className="flex-1 overflow-y-auto p-4 md:p-6">
               <SavedTripCard trip={savedTrips[0]} onUpdate={updateTrip} onDelete={() => deleteTrip(savedTrips[0].id)} />
             </div>
           ) : (
             /* --- Trips View (multiple trips) --- */
-            <div className="flex-1 flex overflow-hidden">
-              {/* Trip selector sidebar */}
-              <div className="w-56 border-r border-gray-100 dark:border-gray-800 flex flex-col flex-shrink-0">
-                <div className="text-[13px] font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide px-4 py-3 border-b border-gray-50 dark:border-gray-800">
-                  Saved Trips ({savedTrips.length})
-                </div>
-                <div className="flex-1 overflow-y-auto p-2 space-y-1">
+            <>
+              {/* Mobile trip selector dropdown (hidden on desktop) */}
+              <div className="md:hidden px-4 py-2 border-b border-gray-100 dark:border-gray-800 flex-shrink-0">
+                <select
+                  value={activeTrip?.id || ''}
+                  onChange={(e) => setActiveTripId(e.target.value)}
+                  className="w-full text-sm font-medium border border-gray-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 rounded-lg px-3 py-2.5 focus:outline-none focus:border-blue-400"
+                >
                   {savedTrips.map((trip) => (
-                    <button
-                      key={trip.id}
-                      onClick={() => setActiveTripId(trip.id)}
-                      className={`w-full text-left rounded-lg p-3 transition-colors group ${
-                        activeTrip?.id === trip.id
-                          ? 'bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800'
-                          : 'hover:bg-gray-50 dark:hover:bg-gray-800 border border-transparent'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2">
-                        <MapPin size={14} className={activeTrip?.id === trip.id ? 'text-blue-600' : 'text-gray-400 dark:text-gray-500'} />
-                        <span className={`text-sm font-medium truncate ${activeTrip?.id === trip.id ? 'text-blue-700 dark:text-blue-400' : 'text-gray-700 dark:text-gray-300'}`}>
-                          {trip.destination || 'Trip'}
-                        </span>
-                      </div>
-                      <div className="text-[13px] text-gray-400 dark:text-gray-500 mt-1 ml-5 truncate">
-                        {trip.dates || 'Dates TBD'}
-                      </div>
-                    </button>
+                    <option key={trip.id} value={trip.id}>
+                      {trip.destination || 'Trip'} — {trip.dates || 'Dates TBD'}
+                    </option>
                   ))}
-                </div>
+                </select>
               </div>
 
-              {/* Active trip detail */}
-              <div className="flex-1 overflow-y-auto p-6">
-                {activeTrip ? (
-                  <SavedTripCard trip={activeTrip} onUpdate={updateTrip} onDelete={() => deleteTrip(activeTrip.id)} />
-                ) : (
-                  <div className="text-center text-gray-400 dark:text-gray-500 py-16">Select a trip from the left.</div>
-                )}
+              <div className="flex-1 flex overflow-hidden">
+                {/* Desktop trip selector sidebar (hidden on mobile) */}
+                <div className="hidden md:flex w-56 border-r border-gray-100 dark:border-gray-800 flex-col flex-shrink-0">
+                  <div className="text-[13px] font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide px-4 py-3 border-b border-gray-50 dark:border-gray-800">
+                    Saved Trips ({savedTrips.length})
+                  </div>
+                  <div className="flex-1 overflow-y-auto p-2 space-y-1">
+                    {savedTrips.map((trip) => (
+                      <button
+                        key={trip.id}
+                        onClick={() => setActiveTripId(trip.id)}
+                        className={`w-full text-left rounded-lg p-3 transition-colors group ${
+                          activeTrip?.id === trip.id
+                            ? 'bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800'
+                            : 'hover:bg-gray-50 dark:hover:bg-gray-800 border border-transparent'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <MapPin size={14} className={activeTrip?.id === trip.id ? 'text-blue-600' : 'text-gray-400 dark:text-gray-500'} />
+                          <span className={`text-sm font-medium truncate ${activeTrip?.id === trip.id ? 'text-blue-700 dark:text-blue-400' : 'text-gray-700 dark:text-gray-300'}`}>
+                            {trip.destination || 'Trip'}
+                          </span>
+                        </div>
+                        <div className="text-[13px] text-gray-400 dark:text-gray-500 mt-1 ml-5 truncate">
+                          {trip.dates || 'Dates TBD'}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Active trip detail */}
+                <div className="flex-1 overflow-y-auto p-4 md:p-6">
+                  {activeTrip ? (
+                    <SavedTripCard trip={activeTrip} onUpdate={updateTrip} onDelete={() => deleteTrip(activeTrip.id)} />
+                  ) : (
+                    <div className="text-center text-gray-400 dark:text-gray-500 py-16">Select a trip.</div>
+                  )}
+                </div>
               </div>
-            </div>
+            </>
           )}
         </div>
       </div>

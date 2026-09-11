@@ -115,6 +115,15 @@ html {
   background: rgba(0, 0, 0, 0.2);
 }
 
+/* Hide scrollbar for horizontal tab strips */
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
 button, a, textarea, input {
   -webkit-tap-highlight-color: transparent;
 }
