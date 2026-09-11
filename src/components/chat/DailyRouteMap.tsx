@@ -46,11 +46,12 @@ export default function DailyRouteMap({ waypoints, polyline, className = '' }: D
     mapRef.current = map;
 
     L.tileLayer(
-      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
+      'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
       {
         attribution:
-          'Tiles &copy; Esri &mdash; Source: Esri, DeLorme, NAVTEQ, USGS, Intermap, iPC, NRCAN, Esri Japan, METI, Esri China (Hong Kong), Esri (Thailand), TomTom, 2012',
-        maxZoom: 19,
+          '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+        subdomains: 'abcd',
+        maxZoom: 20,
       }
     ).addTo(map);
 
@@ -94,7 +95,7 @@ export default function DailyRouteMap({ waypoints, polyline, className = '' }: D
   return (
     <div
       ref={containerRef}
-      className={`w-full h-72 rounded-2xl overflow-hidden border border-black/[0.08] dark:border-white/[0.1] z-0 ${className}`}
+      className={`w-full h-96 rounded-2xl overflow-hidden border border-black/[0.08] dark:border-white/[0.1] z-0 ${className}`}
     />
   );
 }

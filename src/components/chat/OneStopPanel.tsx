@@ -17,7 +17,7 @@ import remarkGfm from 'remark-gfm';
 
 const DailyRouteMap = dynamic(() => import('./DailyRouteMap'), {
   ssr: false,
-  loading: () => <div className="w-full h-72 rounded-2xl bg-gray-100 dark:bg-[#2c2c2e] animate-pulse" />,
+  loading: () => <div className="w-full h-96 rounded-2xl bg-gray-100 dark:bg-[#2c2c2e] animate-pulse" />,
 });
 
 interface OneStopPanelProps {
