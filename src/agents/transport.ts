@@ -111,46 +111,71 @@ async function sleep(ms: number): Promise<void> {
 
 async function geocodeNominatim(place: string, city: string): Promise<GeocodeResult | null> {
   const headers = { 'User-Agent': 'flight-deal-dashboard/1.0 (transport agent)' };
+  const cityLower = city.toLowerCase().split(',')[0].trim();
+
+  const validateResult = (item: any): GeocodeResult | null => {
+    if (!item || !item.lat || !item.lon) return null;
+    const displayName = (item.display_name || '').toLowerCase();
+    // Accept the result only if the display name contains the city name.
+    // This prevents stops from spreading across the world when a landmark
+    // name exists in multiple cities.
+    if (!displayName.includes(cityLower)) return null;
+    return {
+      lat: parseFloat(item.lat),
+      lon: parseFloat(item.lon),
+      displayName: item.display_name,
+    };
+  };
+
   const runRequest = async () => {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
+        // Primary: full-text query with city appended.
         const query = encodeURIComponent(`${place}, ${city}`);
         const res = await fetch(
-          `https://nominatim.openstreetmap.org/search?q=${query}&format=json&limit=1`,
+          `https://nominatim.openstreetmap.org/search?q=${query}&format=json&limit=3`,
           { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }
         );
         if (res.status === 429) {
           await sleep(800 * (attempt + 1));
           continue;
         }
-        if (!res.ok) return null;
-        const data = (await res.json()) as any[];
-        if (!data || data.length === 0) {
-          // Retry with a simpler query (just the place name, no city).
-          if (attempt === 0) {
-            const fallbackQuery = encodeURIComponent(place);
-            const fallbackRes = await fetch(
-              `https://nominatim.openstreetmap.org/search?q=${fallbackQuery}&format=json&limit=1`,
-              { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }
-            );
-            if (fallbackRes.ok) {
-              const fallbackData = (await fallbackRes.json()) as any[];
-              if (fallbackData && fallbackData.length > 0) {
-                return {
-                  lat: parseFloat(fallbackData[0].lat),
-                  lon: parseFloat(fallbackData[0].lon),
-                  displayName: fallbackData[0].display_name,
-                };
-              }
+        if (res.ok) {
+          const data = (await res.json()) as any[];
+          if (data && data.length > 0) {
+            // Try each result until we find one in the right city.
+            for (const item of data) {
+              const validated = validateResult(item);
+              if (validated) return validated;
             }
           }
-          return null;
         }
-        return {
-          lat: parseFloat(data[0].lat),
-          lon: parseFloat(data[0].lon),
-          displayName: data[0].display_name,
-        };
+
+        // Fallback: structured search with city parameter.
+        const cityParam = encodeURIComponent(city);
+        const placeParam = encodeURIComponent(place);
+        const structuredRes = await fetch(
+          `https://nominatim.openstreetmap.org/search?q=${placeParam}&city=${cityParam}&format=json&limit=3`,
+          { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }
+        );
+        if (structuredRes.status === 429) {
+          await sleep(800 * (attempt + 1));
+          continue;
+        }
+        if (structuredRes.ok) {
+          const structData = (await structuredRes.json()) as any[];
+          if (structData && structData.length > 0) {
+            for (const item of structData) {
+              const validated = validateResult(item);
+              if (validated) return validated;
+            }
+          }
+        }
+
+        // If we can't find it in the specified city, return null rather
+        // than falling back to a global search that could return a
+        // location in a completely different city/country.
+        return null;
       } catch {
         return null;
       }
@@ -186,11 +211,22 @@ export async function geocode(place: string, city: string): Promise<GeocodeResul
       .where(eq(geocodedLocations.queryKey, queryKey))
       .limit(1);
     if (cached.length > 0) {
-      return {
-        lat: cached[0].lat,
-        lon: cached[0].lon,
-        displayName: cached[0].displayName || '',
-      };
+      // Validate cached result: the display name should contain the city.
+      // Old cache entries from the pre-validation fallback may have wrong
+      // coordinates (e.g. a Seattle landmark geocoded to another city).
+      const cachedCity = city.toLowerCase().split(',')[0].trim();
+      const cachedDisplay = (cached[0].displayName || '').toLowerCase();
+      if (cachedDisplay.includes(cachedCity)) {
+        return {
+          lat: cached[0].lat,
+          lon: cached[0].lon,
+          displayName: cached[0].displayName || '',
+        };
+      }
+      // Cache entry is stale/wrong — delete it and re-geocode.
+      try {
+        await db.delete(geocodedLocations).where(eq(geocodedLocations.queryKey, queryKey));
+      } catch { /* ignore */ }
     }
 
     const result = await geocodeNominatim(place, city);
