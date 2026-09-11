@@ -31,8 +31,9 @@ Users chat with **Jalan**, a friendly travel companion that:
 10. **Shares trips via link** — generates a public, read-only shareable URL that displays the full itinerary with all payload sections (weather, transport, packing, deals, routes) and its own section navigator. Links never expire.
 11. **Refines existing itineraries via Delta Updates** — when a user asks to modify a previous plan (e.g. "swap day 2 lunch for a vegan spot", "make it shorter"), the agent uses a JSON Patch pattern: the LLM outputs only the specific edits needed, and a deterministic merger applies them surgically to the existing itinerary. Days the user was happy with are left byte-for-byte identical. This saves LLM output tokens, reduces latency, and avoids unwanted changes.
 12. **Interactive daily route maps** — each day's route is rendered on an interactive Leaflet map (CARTO Voyager tiles) with numbered markers, walking/transit polylines, and auto-fit bounds. Airport/departure stops are always anchored as the final waypoint.
-13. **One Stop collaboration** — per-stop thumbs up/down feedback, comments, manual flight/hotel/train entries, and PDF document uploads (e-tickets, vouchers) for each saved trip.
-14. **Mobile-optimized One Stop** — full-screen overlay on mobile with a native trip-selector dropdown, horizontally scrollable tabs with 44px touch targets, and no horizontal page scroll.
+13. **One Stop collaboration** — per-day thumbs up/down feedback and comments alongside each day's itinerary, plus per-stop feedback, manual flight/hotel/train entries, and PDF document uploads for each saved trip. On desktop, each day renders in a 2-column layout with the itinerary on the left and the scrollable comment/voting panel pinned to the right; on mobile, comments are collapsed by default to prevent vertical bloat.
+14. **Traveler Profile** — authenticated users can save global travel preferences (dietary restrictions, transport preference, airline alliance, general notes) that are injected into the LangGraph system prompt so every generated itinerary honors them.
+15. **Mobile-optimized One Stop** — full-screen overlay on mobile with a native trip-selector dropdown, horizontally scrollable tabs with 44px touch targets, and no horizontal page scroll.
 
 ---
 
