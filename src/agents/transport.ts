@@ -23,6 +23,9 @@ function isGenericTransitTerm(name: string): boolean {
   if (GENERIC_TRANSIT_TERMS.includes(lower)) return true;
   // Check if the name is a generic term + "station" (e.g. "MTR Station", "Train Station")
   if (GENERIC_TRANSIT_TERMS.some(term => lower === `${term} station` || lower === `${term} stop`)) return true;
+  // Filter time-slot headings (with or without emoji prefix and trailing colon)
+  // e.g. "🌅 Morning:", "🌞 Afternoon:", "🌙 Evening:"
+  if (/^(?:[🌅🌞🌙]\s*)?(?:morning|afternoon|evening|lunch|dinner|breakfast|snack)\s*:?\s*$/iu.test(lower)) return true;
   return false;
 }
 
