@@ -29,7 +29,10 @@ Users chat with **Jalan**, a friendly travel companion that:
 8. **Lets users save trips** to a **One Stop** panel (sign-in gated) with a trip selector sidebar for multiple saved trips, to-dos, notes, deals, itinerary (with images), routes, transport, and packing list.
 9. **Provides a section navigator** — a minimalist right-side rail (desktop) and floating button + drawer (mobile) that lets users jump to any section of the itinerary (Weather, Transport, Packing, Deals, Routes, individual days).
 10. **Shares trips via link** — generates a public, read-only shareable URL that displays the full itinerary with all payload sections (weather, transport, packing, deals, routes) and its own section navigator. Links never expire.
-11. **Refines existing itineraries** — when a user asks to modify a previous plan (e.g. "make it shorter", "add more food spots"), the agent uses the previous itinerary as context and edits it instead of regenerating from scratch.
+11. **Refines existing itineraries via Delta Updates** — when a user asks to modify a previous plan (e.g. "swap day 2 lunch for a vegan spot", "make it shorter"), the agent uses a JSON Patch pattern: the LLM outputs only the specific edits needed, and a deterministic merger applies them surgically to the existing itinerary. Days the user was happy with are left byte-for-byte identical. This saves LLM output tokens, reduces latency, and avoids unwanted changes.
+12. **Interactive daily route maps** — each day's route is rendered on an interactive Leaflet map (CARTO Voyager tiles) with numbered markers, walking/transit polylines, and auto-fit bounds. Airport/departure stops are always anchored as the final waypoint.
+13. **One Stop collaboration** — per-stop thumbs up/down feedback, comments, manual flight/hotel/train entries, and PDF document uploads (e-tickets, vouchers) for each saved trip.
+14. **Mobile-optimized One Stop** — full-screen overlay on mobile with a native trip-selector dropdown, horizontally scrollable tabs with 44px touch targets, and no horizontal page scroll.
 
 ---
 
@@ -43,6 +46,7 @@ The app uses a **hybrid Gemini model configuration** to balance quality and cost
 |------|-------|-----|
 | **generateItinerary** | `gemini-3.5-flash` | Main content — quality matters most (better prose, fewer hallucinations, near-perfect image placeholder compliance) |
 | **criticNode** | `gemini-3.5-flash` | Quality evaluation — needs strong reasoning to catch hallucinations |
+| **applyRefinements** | `gemini-3.5-flash-lite` | Delta Update — structured JSON patch output, surgical edits only |
 | extractNode | `gemini-3.5-flash-lite` | Quick JSON entity extraction (~1s) |
 | clarifyNode | `gemini-3.5-flash-lite` | Quick follow-up question (~1s) |
 | answerNode | `gemini-3.5-flash-lite` | Quick factual answers (~1s) |
@@ -64,6 +68,7 @@ flowchart TD
     clarify["Clarify<br/>[LLM Agent]<br/>conversational follow-up"]
     gather["Gather<br/>[Tool Integration]<br/>weather + news + deals + images"]
     generate["Generate<br/>[LLM Generator]<br/>itinerary + packing + transport"]
+    applyRefinements["Apply Refinements<br/>[Delta Update]<br/>JSON Patch on existing itinerary"]
     guardrails["Guardrails<br/>[Deterministic Code]<br/>landmarks + dates + duration"]
     critic["Critic<br/>[RAG Evaluator]<br/>relevance + groundedness"]
     answer["Answer<br/>[Tool / DB]<br/>deal lookup"]
@@ -77,7 +82,8 @@ flowchart TD
     extract -->|"greeting"| respond
     extract -->|"vague · ask_question (missing) · plan_trip (missing)"| clarify
     extract -->|"ask_question (complete)"| answer
-    extract -->|"plan_trip / refine"| gather
+    extract -->|"plan_trip"| gather
+    extract -->|"refine"| applyRefinements
 
     %% Clarifications and direct answers are already final responses
     clarify --> END
@@ -86,11 +92,13 @@ flowchart TD
     %% Main pipeline
     gather --> generate
     generate --> guardrails
+    applyRefinements --> guardrails
     guardrails --> critic
 
     %% Retrieval runs once; only generation repeats during self-correction
     critic -->|"Groundedness + Answer Relevance ≥ 4"| respond
     critic -.->|"score < 4 · feedback appended"| generate
+    critic -.->|"refine retry"| applyRefinements
     critic -->|"3 failed drafts"| reject
 
     %% Terminal
@@ -104,6 +112,7 @@ flowchart TD
 | **Clarify** | LLM Agent | Asks follow-up questions for missing fields and prompts users to replace invalid or past date ranges. |
 | **Gather** | Tool Integration | Fetches weather (Open-Meteo), news (Gemini web search), live deals (Seats.aero), and destination images once. Retrieved context is retained across revisions. |
 | **Generate** | LLM Generator | Creates the itinerary and packing list, then builds route links and transport guidance. Only this stage repeats when Critic requests self-correction. |
+| **Apply Refinements** | Delta Update | Surgical editor for the `refine` intent. Uses `gemini-3.5-flash-lite` with structured outputs to generate a JSON patch (array of edits), then applies it deterministically via `mergeItineraryPatch()`. Bypasses Gather and Generate entirely — only the edited day changes, all other days remain byte-for-byte identical. |
 | **Guardrails** | Deterministic Code | Verifies landmarks through Wikipedia, rejects past calendar dates, enforces the exact requested day count, and requires image placeholders. |
 | **Critic** | RAG Evaluator | Runs an LLM-as-a-judge evaluation over `userQuery`, `retrievedContext`, and `draftItinerary`. Scores Context Relevance, Groundedness, and Answer Relevance from 1–5. Groundedness and Answer Relevance must both be at least 4. |
 | **Answer** | Tool / DB | Handles deal-only lookups (e.g. *"find deals to Tokyo in December"*) with live Seats.aero search. |
@@ -122,17 +131,45 @@ The Extract node is an **LLM router** — it classifies the user's intent and ch
 | *"What's the weather like in Bali?"* | `ask_question` | Yes (no dates) | **Clarify** ("When are you going?") |
 | *"I want to travel somewhere"* | `vague` | — | **Clarify** (warm follow-up with example ideas) |
 | *"Hi!"* | `greeting` | — | **Respond** (greeting back) |
-| *"Make it shorter"* (after a plan) | `refine` | No | **Gather** (edits existing itinerary using chat history) |
+| *"Make it shorter"* (after a plan) | `refine` | No | **Apply Refinements** (JSON Patch on existing itinerary — bypasses Gather/Generate) |
 
 **Clarify is a conditional detour, not a prerequisite.** If the user provides enough information upfront (destination + dates), the flow skips Clarify and goes directly to Gather. After Clarify asks for missing info and the user replies, the next turn re-routes through Extract — which then sends the complete request to Gather.
 
-The revision loop runs `Critic → Generate`, so weather, news, flight, and image retrieval are not repeated. Critic reasoning is appended to graph state as generation feedback. After three unsuccessful drafts, Jalan returns a safe rejection instead of exposing an itinerary below the quality threshold.
+The revision loop runs `Critic → Generate` (or `Critic → Apply Refinements` for the refine intent), so weather, news, flight, and image retrieval are not repeated. Critic reasoning is appended to graph state as generation feedback. After three unsuccessful drafts, Jalan returns a safe rejection instead of exposing an itinerary below the quality threshold.
+
+### Delta Update (JSON Patch) for itinerary refinements
+
+When a user asks to modify an existing itinerary (the `refine` intent), the agent uses a **Delta Update** pattern instead of regenerating the entire itinerary from scratch:
+
+1. **Extract existing itinerary** — `extractExistingItinerary()` searches conversation history for the most recent assistant message with an itinerary payload.
+2. **Generate a JSON patch** — `applyRefinements` calls `gemini-3.5-flash-lite` with structured outputs (Zod `ItineraryPatchSchema`) to produce an array of surgical edits:
+   - `replace_stop` — swap a stop's name and/or description.
+   - `add_stop` — insert a new stop under a time slot (morning/afternoon/evening).
+   - `remove_stop` — delete a stop and its associated image placeholder.
+   - `update_note` — update a stop's description without changing its name.
+3. **Merge deterministically** — `mergeItineraryPatch()` splits the markdown into day blocks, applies edits to the target day only, and reassembles. Days not mentioned in the patch are returned byte-for-byte identical.
+
+This saves LLM output tokens, reduces latency, and avoids altering days the user was already happy with. The refine path bypasses `Gather` and `Generate` entirely, routing directly: `Extract → Apply Refinements → Guardrails → Critic → Enrich → Respond`.
+
+### Route optimization
+
+The route optimizer (`src/lib/route-optimizer.ts`) reorders stops within each day to minimize travel time while respecting time-block ordering:
+
+1. **Assigns time blocks** — morning (09:00–12:00), afternoon (13:00–17:00), evening (18:00–22:00). Night markets, rooftop bars, and sunset observatories are scheduled in the evening; museums and shrines in morning/afternoon; markets and breakfast spots in the morning.
+2. **OSRM Table Service** — fetches pairwise travel times between all stops in a day.
+3. **Nearest-neighbor + 2-opt** — optimizes within each time window, then concatenates morning → afternoon → evening sequences.
+4. **Airport anchoring** — airport/departure stops are excluded from reordering and always appended as the final waypoint, so the map matches the itinerary's departure-day order.
+5. **Updates route links** — Google Maps URLs are rebuilt with the optimized stop sequence.
 
 ### Transport agent
 
 After the itinerary is generated and route links are extracted, a dedicated transport agent (`src/agents/transport.ts`) runs to provide real-world transport guidance:
 
-1. **Geocodes each landmark** via Nominatim (OpenStreetMap, free, no API key).
+1. **Geocodes each landmark** via Nominatim (OpenStreetMap, free, no API key) with two-tier validation:
+   - **Tier 1:** display name contains the city → accept (in-city landmark).
+   - **Tier 2:** within 200km of the city center → accept (day-trip destination like Mount Rainier from Seattle, Versailles from Paris).
+   - **Otherwise:** reject (wrong city/country).
+   - Results are cached persistently in PostgreSQL (`geocodedLocations` table) via Drizzle ORM, with cache validation on reads — stale/wrong entries are deleted and re-geocoded automatically.
 2. **Gets real walking and driving times** between consecutive stops via OSRM (free, no API key).
 3. **Recommends the best transport mode per leg** based on distance:
    - Under 15 min walk → "Walk"
@@ -140,11 +177,21 @@ After the itinerary is generated and route links are extracted, a dedicated tran
    - Short drive but long walk → "Transit/Ride-share"
    - Over 5km → "Transit/Ride-share"
    - Otherwise → "Transit" with a balanced note
-4. **Handles generic transit terms** — when the LLM uses terms like "MTR", "Subway", "JR", "Train" as stop names, the agent recognizes them and labels the leg as a transit ride (with the appropriate mode emoji) instead of trying to geocode them as walkable destinations.
+4. **Handles generic transit terms** — when the LLM uses terms like "MTR", "Subway", "JR", "Train" as stop names, the agent recognizes them and labels the leg as a transit ride (with the appropriate mode emoji) instead of trying to geocode them as walkable destinations. Time-slot headings (🌅 Morning:, 🌞 Afternoon:, 🌙 Evening:) are also filtered out using Unicode-aware regex so they never become waypoints.
 5. **Generates city-specific transit tips** via LLM — which transit pass/card to buy, best navigation/ride-share app, cultural tips, and when to walk vs. take transit.
 6. **Estimates transport costs** — markdown table with day pass, single ride, taxi base fare, ride-share, and weekly total.
 
-Processes all days (batched 2 at a time with 1-second delays) to respect Nominatim's 1 req/sec rate limit. Includes retry logic with exponential backoff on HTTP 429, and a fallback geocode query without the city name if the first query returns no results. When geocoding fails, shows a helpful "Take local transit from X to Y" message instead of an error.
+All days are processed in parallel with in-memory and PostgreSQL caching to minimize Nominatim calls. Includes retry logic with exponential backoff on HTTP 429, and a 5-second fetch timeout on all external requests. When geocoding fails, shows a helpful "Take local transit from X to Y" message instead of an error.
+
+### Interactive daily route maps
+
+Each day's route is rendered on an interactive Leaflet map (`src/components/chat/DailyRouteMap.tsx`):
+
+- **CARTO Voyager tiles** — modern, clean cartography (free, API key configured via `NEXT_PUBLIC_CARTO_API_KEY`).
+- **Numbered markers** — each stop gets a blue circle with its order number.
+- **Walking/transit polylines** — OSRM geometry is drawn as a blue line connecting stops.
+- **Auto-fit bounds** — the map zooms to fit all stops with padding.
+- **Airport anchoring** — airport/departure stops are always the final waypoint on the map, matching the itinerary order.
 
 ### Image hydration & relevance scoring
 
@@ -274,31 +321,37 @@ The agent works for any destination worldwide — not just a fixed set of cities
 
 ### One Stop panel
 
-A sign-in-gated, centered modal accessible from the left sidebar that lets users:
+A sign-in-gated modal accessible from the left sidebar that lets users:
 
 - **Save** any assistant response (deals, itinerary, packing list, route links, transport plan).
-- **View saved trips** — when multiple trips are saved, a trip selector sidebar shows all trips with destination and dates; clicking one shows its details.
+- **Duplicate prevention** — server-side and client-side checks prevent saving the same trip twice (by conversationId or destination + dates).
+- **View saved trips** — on desktop, a trip selector sidebar lists all trips; on mobile, a native `<select>` dropdown at the top.
 - **Manage to-dos** — add, check off, and delete tasks per trip.
 - **Write notes** — free-form notes per trip.
+- **Per-stop collaboration** — thumbs up/down feedback and comments on individual landmarks, persisted per saved trip.
+- **Flights & Docs** — manual flight/hotel/train/car entries with confirmation codes, plus PDF document uploads (e-tickets, vouchers) stored as base64 data URLs.
+- **Interactive route maps** — each day's route is rendered on a Leaflet map with CARTO Voyager tiles.
 - **Copy trip summary** — copies everything to clipboard.
 - **Delete trips** — organized copy + delete buttons in each trip card header.
 - **Itinerary images** — the itinerary tab renders images inline with proper styling.
-- **Persist locally** — saved trips are stored in `localStorage`.
+- **Mobile-optimized** — full-screen overlay on mobile (100vw x 100dvh), horizontally scrollable tabs with 44px touch targets, no horizontal page scroll, responsive form grids.
+- **Persist** — saved trips are stored in PostgreSQL (signed-in users) or `localStorage` (guests).
 
 ---
 
 ## Tech stack
 
-- **Frontend**: Next.js 14 App Router, React, TypeScript, Tailwind CSS, SWR, Clerk auth
+- **Frontend**: Next.js 14 App Router, React, TypeScript, Tailwind CSS, SWR, Clerk auth, Leaflet (interactive maps)
 - **Backend**: Next.js Route Handlers (Node runtime), Vercel serverless functions
-- **AI**: LangChain + LangGraph, Google Gemini (hybrid: `gemini-3.5-flash` for quality, `gemini-3.5-flash-lite` for speed)
+- **AI**: LangChain + LangGraph, Google Gemini (hybrid: `gemini-3.5-flash` for quality, `gemini-3.5-flash-lite` for speed + Delta Updates)
 - **Flight deals**: Seats.aero Partner API (live search + trip details)
-- **Transport routing**: OSRM (free walking/driving times) + Nominatim (geocoding)
+- **Transport routing**: OSRM (free walking/driving times + Table Service for route optimization) + Nominatim (geocoding with two-tier validation + PostgreSQL cache)
+- **Maps**: Leaflet + CARTO Voyager tiles (modern cartography, API key configured)
 - **Weather**: Open-Meteo (forecast + long-range climate projections)
 - **Images**: Wikimedia Commons + Openverse + Pexels (optional, 3 sources), with metadata-aware relevance scoring and destination fallback
 - **News**: Google Gemini web search grounding
 - **Date parsing**: chrono-node
-- **Database**: PostgreSQL + Drizzle ORM (for cached deals and conversation history)
+- **Database**: PostgreSQL + Drizzle ORM (for cached deals, conversation history, saved trips, geocoded locations)
 - **Auth**: Clerk (sign-in/sign-up, anonymous sessions)
 - **Deployment**: Vercel
 
@@ -308,7 +361,7 @@ A sign-in-gated, centered modal accessible from the left sidebar that lets users
 
 ### Conversational chat
 - Natural-language trip planning with follow-up questions.
-- **Refine/follow-up** — ask to modify an existing itinerary (e.g. "make it shorter", "add more food spots") and the agent edits the previous plan instead of regenerating from scratch.
+- **Refine/follow-up via Delta Updates** — ask to modify an existing itinerary (e.g. "swap day 2 lunch for a vegan spot", "make it shorter") and the agent generates a JSON patch of surgical edits, then applies them deterministically. Only the edited day changes; all other days remain byte-for-byte identical. Saves tokens and avoids unwanted changes.
 - Vague message handling — asks warm, conversational follow-ups with example ideas.
 - Context-aware loading statuses (e.g. *"Checking the weather..."*, *"Looking for deals..."*).
 - Conversation history with dynamic titles and delete.
@@ -333,10 +386,12 @@ A sign-in-gated, centered modal accessible from the left sidebar that lets users
 - **Cost estimates** — day pass, single ride, taxi, ride-share, and weekly total.
 - Green-themed card in the chat with transit tips and cost estimates.
 
-### Daily route links
+### Daily route links & interactive maps
 - Each day's landmarks are extracted and turned into a Google Maps directions URL.
 - **Highlight summaries** — shows the key stops (e.g. "Louvre → Eiffel Tower → Montmartre").
-- Clickable "Daily Routes" card in the chat.
+- **Interactive Leaflet map** — each day's route is also rendered on an interactive map (CARTO Voyager tiles) with numbered markers, walking/transit polylines, and auto-fit bounds. Airport/departure stops are always anchored as the final waypoint.
+- **Route optimization** — stops within each day are reordered via OSRM Table Service + 2-opt to minimize travel time while respecting morning → afternoon → evening ordering.
+- Clickable "Daily Routes" card in the chat and in the One Stop panel.
 
 ### Section navigator
 - **Desktop**: minimalist right-side rail listing all itinerary sections (days, weather, transport, packing, deals, routes) as clean text links.
@@ -359,14 +414,19 @@ A sign-in-gated, centered modal accessible from the left sidebar that lets users
 - 30-day maximum trip duration.
 
 ### One Stop panel
-- Sign-in-gated centered modal (95vw x 90vh).
+- Sign-in-gated modal — full-screen overlay on mobile, centered 95vw x 90vh on desktop.
 - Save deals, itinerary (with inline images), packing list, transport plan, and routes.
-- **Trip selector sidebar** — when multiple trips are saved, a left sidebar lists all trips with destination and dates; click to view details.
+- **Duplicate prevention** — server-side and client-side checks by conversationId or destination + dates.
+- **Trip selector** — sidebar on desktop, native `<select>` dropdown on mobile.
+- **Per-stop collaboration** — thumbs up/down feedback and comments on individual landmarks.
+- **Flights & Docs** — manual flight/hotel/train entries + PDF document uploads.
+- **Interactive route maps** — Leaflet maps with CARTO Voyager tiles per day.
 - To-do list and notes per trip.
 - Copy-to-clipboard and delete buttons organized in each trip card header.
-- localStorage persistence.
+- PostgreSQL persistence (signed-in) or localStorage (guests).
 
 ### Mobile-optimized
+- **One Stop panel** — full-screen overlay (100vw x 100dvh) on mobile, native trip-selector dropdown, horizontally scrollable tabs with 44px touch targets, responsive form grids, no horizontal page scroll.
 - No horizontal scroll — all content fits within the viewport.
 - Images and tables scroll within their containers, not the page.
 - Auto-scroll to top when itinerary finishes generating.
@@ -381,6 +441,10 @@ A sign-in-gated, centered modal accessible from the left sidebar that lets users
 - `DELETE /api/chat/conversations/[id]` — delete a conversation.
 - `GET /api/chat/history` — load message history for a conversation.
 - `POST /api/chat/merge-session` — merge anonymous session into user account on sign-in.
+- `GET /api/saved-trips` — list saved trips for the current user.
+- `POST /api/saved-trips` — create a saved trip (with duplicate detection by conversationId or destination + dates).
+- `PATCH /api/saved-trips/[id]` — update trip todos, notes, feedback, flight info, documents.
+- `DELETE /api/saved-trips/[id]` — delete a saved trip.
 - `POST /api/share` — create a shareable link for a conversation's latest itinerary (server-side storage, never expires).
 - `GET /api/share/[id]` — fetch a shared trip by ID (public, no auth required).
 - `GET /api/deals` — paginated cached deals (legacy dashboard support).
@@ -403,7 +467,8 @@ A sign-in-gated, centered modal accessible from the left sidebar that lets users
 - **Openverse** — free CC images from Flickr, Wikimedia, Rawpixel, etc. (no API key).
 - **Pexels** — free stock photos (optional, requires `PEXELS_API_KEY`).
 - **Google Maps** — daily route directions links (no API key required, uses public URL format).
-- **Google Gemini** (via LangChain) — chat, itinerary generation, transport tips, critic, and reasoning.
+- **CARTO Voyager** — modern map tiles for interactive Leaflet route maps (free within fair use, API key configured via `NEXT_PUBLIC_CARTO_API_KEY`).
+- **Google Gemini** (via LangChain) — chat, itinerary generation, Delta Updates (refine), transport tips, critic, and reasoning.
 - **Clerk** — authentication and user management.
 
 ---
@@ -414,17 +479,19 @@ A sign-in-gated, centered modal accessible from the left sidebar that lets users
 src/
   agents/
     conversation-graph.ts    # LangGraph state machine (extract → gather → generate → guardrails → RAG critic → respond)
+    refine-itinerary.ts      # Delta Update node: JSON Patch generation + deterministic mergeItineraryPatch reducer
     itinerary-guardrails.ts  # Wikipedia landmark verification + Google Maps route link builder
-    transport.ts             # Transport agent: OSRM routing + Nominatim geocoding + LLM transit tips
+    transport.ts             # Transport agent: OSRM routing + Nominatim geocoding (two-tier validation) + LLM transit tips
     destination-images.ts    # Image hydration: Wikimedia + Openverse + Pexels, with metadata-aware relevance scoring
     weather.ts               # Open-Meteo forecast + climate projections
     news-search.ts           # Destination news search (Gemini web search grounding)
     graph.ts                 # Itinerary graph for deal modal (architect → critic)
     ...
   lib/
+    route-optimizer.ts       # OSRM Table Service + 2-opt route optimization with time-block scheduling
     seatsaero.ts             # Seats.aero live search + trip details + deal diversification
     airline-booking.ts       # Airline-specific booking URL builder
-    chat-state.ts            # Shared types (ChatPayload, SavedTrip, RouteLink, TransportPlan, etc.)
+    chat-state.ts            # Shared types + ItineraryPatchSchema (Zod) for Delta Updates
     chat-db.ts               # Conversation persistence
     ai-provider.ts           # LLM model configuration (hybrid: speed + quality models)
     ragEvaluator.ts          # Typed RAG Triad LLM-as-a-judge evaluation
@@ -435,7 +502,8 @@ src/
   components/
     chat/
       ChatPage.tsx           # Main chat UI with sidebar, messages, section navigator, One Stop panel
-      OneStopPanel.tsx       # Sign-in-gated modal for saved trips, to-dos, notes
+      OneStopPanel.tsx       # Sign-in-gated modal: saved trips, to-dos, notes, collaboration, flights & docs
+      DailyRouteMap.tsx      # Interactive Leaflet map (CARTO Voyager tiles) with numbered markers + polylines
     SplashRedirect.tsx       # Redirects old domain to jalan-ai.vercel.app
     WalkersIcon.tsx          # Custom walking figure logo
     AuthProvider.tsx         # Clerk provider wrapper
@@ -444,16 +512,20 @@ src/
       chat/route.ts          # Streaming chat endpoint (SSE)
       chat/conversations/    # Conversation CRUD
       chat/history/          # Message history
+      saved-trips/route.ts   # Saved trip CRUD with duplicate detection
       share/route.ts         # POST: create shareable trip link
       share/[id]/route.ts    # GET: fetch shared trip (public, no auth)
       ...
     share/[id]/page.tsx      # Public read-only shared trip page with section nav
   db/
-    schema.ts                # Drizzle schema: flights, deals, conversations, messages, shared_trips
+    schema.ts                # Drizzle schema: flights, deals, conversations, messages, shared_trips, geocoded_locations
 scripts/
   smoke-test.ts              # Local/production smoke tests (46 assertions, including date safety and exact duration)
   test-date-normalization.ts # Deterministic past-date and inclusive-duration regression tests
   test-rag-evaluator.ts      # Structured RAG evaluator test with dummy retrieved context
+  test-refine-patch.ts       # Delta Update merger test — asserts Days 1 & 3 unchanged when editing Day 2
+  test-route-optimization.ts # OSRM Table Service + 2-opt route optimization test (Paris fixture)
+  test-seattle-geocode.ts    # Geocoding validation test (day-trip destinations within 200km)
   test-images.ts             # Local image testing without consuming Gemini tokens
 ```
 
@@ -474,6 +546,7 @@ scripts/
    - `CHAT_MODEL` — optional, defaults to `gemini-3.5-flash-lite` (speed-critical nodes).
    - `QUALITY_MODEL` — optional, defaults to `gemini-3.5-flash` (quality-critical nodes).
    - `PEXELS_API_KEY` — optional, enables Pexels as a 4th image source.
+   - `NEXT_PUBLIC_CARTO_API_KEY` — optional, enables authenticated CARTO Voyager map tiles (free within fair use).
 
 3. **Run the database migration:**
    ```bash
@@ -508,7 +581,10 @@ scripts/
    ```bash
    npx tsx scripts/test-date-normalization.ts
    npx tsx scripts/test-rag-evaluator.ts
+   npx tsx scripts/test-refine-patch.ts
+   npx tsx scripts/test-route-optimization.ts
    ```
+   `test-refine-patch.ts` verifies the Delta Update merger: mocks a 3-day itinerary, applies a "swap day 2 lunch" patch, and asserts Days 1 and 3 are byte-for-byte identical. `test-route-optimization.ts` tests OSRM Table Service + 2-opt with a Paris fixture (Louvre, Sacré-Cœur, Musée d'Orsay).
 
 9. **Run local image tests** (without consuming Gemini tokens):
    ```bash
@@ -523,21 +599,22 @@ scripts/
 
 - Built a **conversational travel planner** powered by a LangGraph multi-agent loop (extract → gather → generate → guardrails → RAG critic → respond) that turns natural-language requests into full itineraries.
 - Configured a **hybrid Gemini model setup** — `gemini-3.5-flash` for quality-critical nodes (itinerary generation, critic) and `gemini-3.5-flash-lite` for speed-critical nodes (extraction, clarification, answers) — balancing quality and cost (~$15-20 per 1,000 trips).
-- Added a **refine/follow-up feature** — when a user asks to modify a previous plan, the agent uses the chat history as context and edits the existing itinerary instead of regenerating from scratch.
-- Added a **transport agent** that geocodes every itinerary stop via Nominatim (with retry logic for rate-limiting), gets real walking/driving times via OSRM, recommends the best transport mode per leg, handles generic transit terms (MTR, JR, Subway), and generates city-specific transit tips + cost estimates via LLM.
+- Added a **refine/follow-up feature via Delta Updates (JSON Patch)** — when a user asks to modify a previous plan, the agent generates a JSON patch of surgical edits using `gemini-3.5-flash-lite` with structured outputs, then applies them deterministically via `mergeItineraryPatch()`. Only the edited day changes; all other days remain byte-for-byte identical. Saves LLM tokens, reduces latency, and avoids unwanted changes. Bypasses Gather and Generate entirely.
+- Added a **transport agent** that geocodes every itinerary stop via Nominatim (with two-tier validation: in-city by display name + day-trip by 200km radius, persistent PostgreSQL caching, retry logic for rate-limiting), gets real walking/driving times via OSRM, recommends the best transport mode per leg, handles generic transit terms (MTR, JR, Subway) and filters time-slot headings (🌅 Morning:, 🌞 Afternoon:, 🌙 Evening:) using Unicode-aware regex, and generates city-specific transit tips + cost estimates via LLM.
 - Integrated **live Seats.aero award deal search** with trip-detail enrichment (duration, stops, aircraft), direct airline booking links, **deal diversification by origin city** (round-robin selection across US gateways), and **country-level destination support** (e.g. "Japan" → NRT/HND/KIX) with broadened date ranges.
 - Added a typed **RAG Triad LLM-as-a-judge pipeline** that scores Context Relevance, Groundedness, and Answer Relevance, requires 4/5 on the two user-facing quality metrics, and regenerates drafts using evaluator reasoning without repeating external retrieval.
 - Added **hallucination and date guardrails** that verify landmarks against Wikipedia, reject past travel dates and stale calendar events, and enforce exact inclusive trip duration.
-- Implemented **daily Google Maps route links** with highlight summaries by extracting landmarks from the itinerary and building clickable directions URLs — no API key required.
+- Implemented **daily Google Maps route links** with highlight summaries by extracting landmarks from the itinerary and building clickable directions URLs — no API key required. Also added **interactive Leaflet maps** (CARTO Voyager tiles) with numbered markers, walking/transit polylines, and auto-fit bounds. Airport/departure stops are always anchored as the final waypoint.
+- Added **OSRM-based route optimization** (Table Service + nearest-neighbor + 2-opt) that reorders stops within each day to minimize travel time while respecting morning → afternoon → evening time-block ordering.
 - Built a **3-source image hydration agent** (Wikimedia Commons, Openverse, Pexels) with metadata-aware relevance scoring (Porter stemming, length-normalized Levenshtein distance, title + tag cross-validation), bad-pattern detection, dimension checks, deduplication, and destination image fallback so every day always has a high-quality landscape image.
 - Added a **30-day duration guardrail** that caps absurd requests (e.g. "2 years") at 30 days, enforced in 3 places (extract, generate, prompt).
 - Supports **70+ global destinations** with country-to-airport-code mapping for deal searches, and fallback to city name for weather, news, and images when IATA codes aren't in the lookup tables.
 - Built a **share trip link feature** — generates public, read-only shareable URLs (stored server-side in PostgreSQL, never expire) that display the full itinerary with all payload sections and a section navigator.
 - Built a **Gemini-style sidebar** with New trip, One Stop, and recent conversations as nav items, plus a closable sign-in prompt for guests. Logo is clickable to navigate home.
-- Built a **One Stop panel** (sign-in-gated modal) with a trip selector sidebar for multiple saved trips, inline itinerary images, to-dos, notes, copy summary, and delete — all organized in clean card headers.
+- Built a **One Stop panel** (sign-in-gated modal) with a trip selector (sidebar on desktop, dropdown on mobile), inline itinerary images, to-dos, notes, per-stop collaboration (thumbs up/down + comments), manual flight/hotel/train entries, PDF document uploads, interactive route maps, copy summary, and delete — all organized in clean card headers. Includes **duplicate trip prevention** (server-side + client-side by conversationId or destination + dates).
 - Integrated **Clerk authentication** with anonymous session merging and sign-in-gated features.
 - Added **vague message handling** — when users send unclear messages, the agent asks warm, conversational follow-ups with example trip ideas.
 - Used **chrono-node** for flexible natural-language date parsing (e.g. *"in two weeks"*, *"next October"*, *"2 week trip"*).
-- Optimized **mobile experience** — no horizontal scroll, auto-scroll to top on itinerary completion, responsive layout with mobile sidebar drawer, floating section navigator button.
+- Optimized **mobile experience** — full-screen One Stop overlay (100vw x 100dvh), native trip-selector dropdown, horizontally scrollable tabs with 44px touch targets, no horizontal page scroll, auto-scroll to top on itinerary completion, responsive layout with mobile sidebar drawer, floating section navigator button.
 - Implemented **local and post-deploy smoke tests** with 46 assertions covering date safety, exact duration, explicit past-date rejection, RAG-sensitive chat quality, routes, transport, images, deals, and Wikipedia landmark verification.
 - Added **local image testing script** (`scripts/test-images.ts`) for testing image fetching without consuming Gemini tokens.
