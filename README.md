@@ -71,6 +71,7 @@ flowchart TD
     applyRefinements["Apply Refinements<br/>[Delta Update]<br/>JSON Patch on existing itinerary"]
     guardrails["Guardrails<br/>[Deterministic Code]<br/>landmarks + dates + duration"]
     critic["Critic<br/>[RAG Evaluator]<br/>relevance + groundedness"]
+    enrich["Enrich<br/>[Tool Integration]<br/>transport + images in parallel"]
     answer["Answer<br/>[Tool / DB]<br/>deal lookup"]
     respond["Respond<br/>[Response Formatter]<br/>hydrate + assemble"]
     reject["Reject<br/>[Safe Fallback]<br/>withhold unverified draft"]
@@ -95,11 +96,14 @@ flowchart TD
     applyRefinements --> guardrails
     guardrails --> critic
 
-    %% Retrieval runs once; only generation repeats during self-correction
-    critic -->|"Groundedness + Answer Relevance ≥ 4"| respond
+    %% Critic routing — approval goes to enrichment, rejection goes back to generation
+    critic -->|"Groundedness + Answer Relevance ≥ 4"| enrich
     critic -.->|"score < 4 · feedback appended"| generate
     critic -.->|"refine retry"| applyRefinements
     critic -->|"3 failed drafts"| reject
+
+    %% Enrichment runs transport + images concurrently, then responds
+    enrich --> respond
 
     %% Terminal
     respond --> END
@@ -115,8 +119,9 @@ flowchart TD
 | **Apply Refinements** | Delta Update | Surgical editor for the `refine` intent. Uses `gemini-3.5-flash-lite` with structured outputs to generate a JSON patch (array of edits), then applies it deterministically via `mergeItineraryPatch()`. Bypasses Gather and Generate entirely — only the edited day changes, all other days remain byte-for-byte identical. |
 | **Guardrails** | Deterministic Code | Verifies landmarks through Wikipedia, rejects past calendar dates, enforces the exact requested day count, and requires image placeholders. |
 | **Critic** | RAG Evaluator | Runs an LLM-as-a-judge evaluation over `userQuery`, `retrievedContext`, and `draftItinerary`. Scores Context Relevance, Groundedness, and Answer Relevance from 1–5. Groundedness and Answer Relevance must both be at least 4. |
+| **Enrich** | Tool Integration | Runs transport (OSRM routing + Nominatim geocoding) and image hydration (Wikimedia + Openverse + Pexels) concurrently via `Promise.all()`. Builds interactive route maps and Google Maps links. |
 | **Answer** | Tool / DB | Handles deal-only lookups (e.g. *"find deals to Tokyo in December"*) with live Seats.aero search. |
-| **Respond** | Response Formatter | Hydrates image placeholders with deduplicated real image URLs and assembles the final markdown response. |
+| **Respond** | Response Formatter | Assembles the final markdown response with packing tips, transport notes, and image placeholders hydrated. |
 
 #### Routing logic
 
