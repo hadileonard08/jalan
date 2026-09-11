@@ -65,11 +65,12 @@ flowchart TD
     START(["START<br/>[System]"])
     END(["END<br/>[System]"])
 
-    extract["Extract<br/>[LLM Router]<br/>parse intent + entities"]
+    state[("State<br/>currentItinerary · previousItineraries<br/>userPreferences · entities")]
+    extract["Extract<br/>[LLM Router]<br/>parse intent + entities<br/>reads currentItinerary"]
     clarify["Clarify<br/>[LLM Agent]<br/>conversational follow-up"]
     gather["Gather<br/>[Tool Integration]<br/>weather + news + deals + images"]
     generate["Generate<br/>[LLM Generator]<br/>itinerary + packing + transport"]
-    applyRefinements["Apply Refinements<br/>[Delta Update]<br/>JSON Patch on existing itinerary"]
+    applyRefinements["Apply Refinements<br/>[Delta Update]<br/>JSON Patch on currentItinerary<br/>preserves previousItineraries"]
     guardrails["Guardrails<br/>[Deterministic Code]<br/>landmarks + dates + duration"]
     critic["Critic<br/>[RAG Evaluator]<br/>relevance + groundedness"]
     enrich["Enrich<br/>[Tool Integration]<br/>transport + images in parallel"]
@@ -78,14 +79,15 @@ flowchart TD
     reject["Reject<br/>[Safe Fallback]<br/>withhold unverified draft"]
 
     %% Entry
-    START --> extract
+    START --> state
+    state --> extract
 
     %% Extract routing — consolidated labels to avoid overlap
     extract -->|"greeting"| respond
     extract -->|"vague · ask_question (missing) · plan_trip (missing)"| clarify
     extract -->|"ask_question (complete)"| answer
     extract -->|"plan_trip"| gather
-    extract -->|"refine"| applyRefinements
+    extract -->|"refine (currentItinerary exists)"| applyRefinements
 
     %% Clarifications and direct answers are already final responses
     clarify --> END
@@ -97,10 +99,10 @@ flowchart TD
     applyRefinements --> guardrails
     guardrails --> critic
 
-    %% Critic routing — approval goes to enrichment, rejection goes back to generation
+    %% Critic routing — approval goes to enrichment; rejection loops back to generation
     critic -->|"Groundedness + Answer Relevance ≥ 4"| enrich
     critic -.->|"score < 4 · feedback appended"| generate
-    critic -.->|"refine retry"| applyRefinements
+    critic -.->|"refine fallback"| generate
     critic -->|"3 failed drafts"| reject
 
     %% Enrichment runs transport + images concurrently, then responds
