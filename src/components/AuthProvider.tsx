@@ -14,6 +14,13 @@ const AuthContext = createContext<AuthState>({ isLoaded: true, isSignedIn: false
 const clerkKey = typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY : undefined;
 const clerkConfigured = !!clerkKey && !clerkKey.startsWith('pk_test_') && !clerkKey.startsWith('pk_test_...');
 
+const clerkOptions = clerkConfigured
+  ? {
+      clerkJSUrl: '/__clerk/npm/@clerk/clerk-js@5/dist/clerk.browser.js',
+      proxyUrl: '/__clerk',
+    }
+  : undefined;
+
 function ClerkUserProvider({ children }: { children: ReactNode }) {
   const clerk = useClerkUser();
   return (
@@ -32,7 +39,7 @@ function ClerkUserProvider({ children }: { children: ReactNode }) {
 export function AuthProvider({ children }: { children: ReactNode }) {
   if (clerkConfigured) {
     return (
-      <ClerkProvider>
+      <ClerkProvider {...clerkOptions}>
         <ClerkUserProvider>{children}</ClerkUserProvider>
       </ClerkProvider>
     );
