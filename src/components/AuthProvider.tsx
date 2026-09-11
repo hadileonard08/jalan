@@ -12,7 +12,7 @@ interface AuthState {
 const AuthContext = createContext<AuthState>({ isLoaded: true, isSignedIn: false, user: null });
 
 const clerkKey = typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY : undefined;
-const clerkConfigured = !!clerkKey && !clerkKey.includes('pk_test_...');
+const clerkConfigured = !!clerkKey && !clerkKey.startsWith('pk_test_') && !clerkKey.startsWith('pk_test_...');
 
 function ClerkUserProvider({ children }: { children: ReactNode }) {
   const clerk = useClerkUser();
