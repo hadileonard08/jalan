@@ -136,6 +136,22 @@ export interface StopFeedback {
   comments: StopComment[];
 }
 
+// Per-day collaboration feedback for saved trips.
+export interface DayComment {
+  id: string;
+  author: string;
+  text: string;
+  createdAt: string;
+}
+
+export interface DayFeedback {
+  dayIndex: number;
+  thumbsUp: number;
+  thumbsDown: number;
+  userVote?: 'up' | 'down' | null;
+  comments: DayComment[];
+}
+
 // Manual flight/hotel/document entry for the Flights & Docs tab.
 export interface ManualFlightEntry {
   id: string;
@@ -171,6 +187,8 @@ export interface SavedTrip {
   notes: string;
   // Per-stop feedback keyed by landmark name (lowercased).
   feedback: Record<string, StopFeedback>;
+  // Per-day feedback keyed by day index (1-based).
+  dayFeedback: Record<string, DayFeedback>;
   // Manual flight/hotel/train/etc entries.
   flightInfo: ManualFlightEntry[];
   // Uploaded PDF e-tickets, vouchers, etc.

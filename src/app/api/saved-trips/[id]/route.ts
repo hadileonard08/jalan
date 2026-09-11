@@ -16,13 +16,14 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     }
 
     const body = await req.json();
-    const { todos, notes, feedback, flightInfo, documents } = body;
+    const { todos, notes, feedback, dayFeedback, flightInfo, documents } = body;
 
     // Build the update object — only update fields that were provided.
     const updates: Record<string, any> = { updatedAt: new Date() };
     if (todos !== undefined) updates.todos = JSON.stringify(todos);
     if (notes !== undefined) updates.notes = notes;
     if (feedback !== undefined) updates.feedback = JSON.stringify(feedback);
+    if (dayFeedback !== undefined) updates.dayFeedback = JSON.stringify(dayFeedback);
     if (flightInfo !== undefined) updates.flightInfo = JSON.stringify(flightInfo);
     if (documents !== undefined) updates.documents = JSON.stringify(documents);
 
@@ -46,6 +47,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
         todos: JSON.parse(updated.todos),
         notes: updated.notes,
         feedback: JSON.parse(updated.feedback || '{}'),
+        dayFeedback: JSON.parse(updated.dayFeedback || '{}'),
         flightInfo: JSON.parse(updated.flightInfo || '[]'),
         documents: JSON.parse(updated.documents || '[]'),
         savedAt: updated.createdAt.toISOString(),

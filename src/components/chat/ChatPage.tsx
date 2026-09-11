@@ -740,6 +740,7 @@ export default function ChatPage() {
       todos: [],
       notes: '',
       feedback: {},
+      dayFeedback: {},
       flightInfo: [],
       documents: [],
       savedAt: new Date().toISOString(),

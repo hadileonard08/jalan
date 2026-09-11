@@ -8,7 +8,7 @@ import {
   FileText, Upload, Download, Hotel, Train, Car, ChevronDown, ChevronUp,
 } from 'lucide-react';
 import type {
-  SavedTrip, ChatPayload, StopFeedback, StopComment,
+  SavedTrip, ChatPayload, StopFeedback, StopComment, DayFeedback, DayComment,
   ManualFlightEntry, UploadedDocument,
 } from '@/lib/chat-state';
 import type { DayTransport } from '@/agents/transport';
@@ -235,70 +235,211 @@ function StopFeedbackBar({
   );
 }
 
-// --- Itinerary tab with per-stop feedback ---
+// Split the itinerary into blocks, each beginning with a Day heading.
+function splitItineraryByDay(itinerary: string): { day?: number; content: string }[] {
+  if (!itinerary) return [];
+  const blocks = itinerary.split(/(?=#+\s+Day\s+\d+)/i).filter(Boolean);
+  return blocks.map((block) => {
+    const headingMatch = block.match(/#+\s+Day\s+(\d+)/i);
+    return { day: headingMatch ? Number(headingMatch[1]) : undefined, content: block };
+  });
+}
 
-function ItineraryTab({ trip, onUpdate }: { trip: SavedTrip; onUpdate: (trip: SavedTrip) => void }) {
-  const payload = trip.payload;
-  const dayStops = extractStopsFromItinerary(payload.itinerary || '');
+// --- Per-day feedback (thumbs up/down + comments) ---
 
-  // Build a map of stopId → { day, name } for quick lookup.
-  const stopByDay: Record<string, { name: string; id: string }[]> = {};
-  for (const d of dayStops) stopByDay[d.day] = d.stops;
+function getDayFeedback(trip: SavedTrip, dayIndex: number): DayFeedback {
+  return trip.dayFeedback?.[String(dayIndex)] || {
+    dayIndex,
+    thumbsUp: 0,
+    thumbsDown: 0,
+    userVote: null,
+    comments: [],
+  };
+}
+
+function DayFeedbackBar({
+  dayIndex,
+  trip,
+  onUpdate,
+}: {
+  dayIndex: number;
+  trip: SavedTrip;
+  onUpdate: (trip: SavedTrip) => void;
+}) {
+  const [showComments, setShowComments] = useState(false);
+  const [commentText, setCommentText] = useState('');
+  const fb = getDayFeedback(trip, dayIndex);
+
+  const vote = (direction: 'up' | 'down') => {
+    const current = getDayFeedback(trip, dayIndex);
+    const newFeedback: Record<string, DayFeedback> = { ...(trip.dayFeedback || {}) };
+    let thumbsUp = current.thumbsUp;
+    let thumbsDown = current.thumbsDown;
+    let userVote: 'up' | 'down' | null = direction;
+
+    if (current.userVote === direction) {
+      userVote = null;
+      if (direction === 'up') thumbsUp = Math.max(0, thumbsUp - 1);
+      else thumbsDown = Math.max(0, thumbsDown - 1);
+    } else {
+      if (current.userVote === 'up') thumbsUp = Math.max(0, thumbsUp - 1);
+      if (current.userVote === 'down') thumbsDown = Math.max(0, thumbsDown - 1);
+      if (direction === 'up') thumbsUp += 1;
+      else thumbsDown += 1;
+    }
+
+    newFeedback[String(dayIndex)] = { ...current, thumbsUp, thumbsDown, userVote };
+    onUpdate({ ...trip, dayFeedback: newFeedback });
+  };
+
+  const addComment = () => {
+    if (!commentText.trim()) return;
+    const current = getDayFeedback(trip, dayIndex);
+    const newComment: DayComment = {
+      id: crypto.randomUUID(),
+      author: 'You',
+      text: commentText.trim(),
+      createdAt: new Date().toISOString(),
+    };
+    const newFeedback: Record<string, DayFeedback> = { ...(trip.dayFeedback || {}) };
+    newFeedback[String(dayIndex)] = { ...current, comments: [...current.comments, newComment] };
+    onUpdate({ ...trip, dayFeedback: newFeedback });
+    setCommentText('');
+  };
+
+  const deleteComment = (commentId: string) => {
+    const current = getDayFeedback(trip, dayIndex);
+    const newFeedback: Record<string, DayFeedback> = { ...(trip.dayFeedback || {}) };
+    newFeedback[String(dayIndex)] = {
+      ...current,
+      comments: current.comments.filter((c) => c.id !== commentId),
+    };
+    onUpdate({ ...trip, dayFeedback: newFeedback });
+  };
 
   return (
-    <div className="space-y-4">
-      <div className="prose prose-sm dark:prose-invert max-w-none text-gray-700 dark:text-gray-300">
-        {payload.itinerary ? (
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            components={{
-              img: ({ src, alt }) => (
-                <figure className="my-3">
-                  {src && <img src={src} alt={alt || ''} className="rounded-xl shadow-md w-full" loading="lazy" />}
-                  {alt && <figcaption className="text-[13px] text-gray-400 dark:text-gray-500 text-center mt-1">{alt}</figcaption>}
-                </figure>
-              ),
-              h1: ({ children }) => <h1 className="text-lg font-bold text-gray-900 dark:text-gray-100 mt-2 mb-1">{children}</h1>,
-              h2: ({ children }) => <h2 className="text-base font-bold text-gray-900 dark:text-gray-100 mt-3 mb-1">{children}</h2>,
-              h3: ({ children }) => <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-200 mt-2 mb-1">{children}</h3>,
-              strong: ({ children }) => <strong className="font-semibold text-gray-900 dark:text-gray-100">{children}</strong>,
-              ul: ({ children }) => <ul className="list-disc list-inside my-2 space-y-0.5">{children}</ul>,
-              ol: ({ children }) => <ol className="list-decimal list-inside my-2 space-y-0.5">{children}</ol>,
-            }}
-          >
-            {payload.itinerary}
-          </ReactMarkdown>
-        ) : (
-          <div className="text-sm text-gray-500 dark:text-gray-400">No itinerary saved.</div>
-        )}
+    <div className="h-full flex flex-col">
+      <div className="flex items-center gap-3 pb-3 border-b border-gray-100 dark:border-gray-700/50">
+        <button
+          onClick={() => vote('up')}
+          className={`flex items-center gap-1 text-[13px] px-2 py-1 rounded-lg transition-colors ${
+            fb.userVote === 'up'
+              ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300'
+              : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'
+          }`}
+          title="Thumbs up"
+        >
+          <ThumbsUp size={16} />
+          {fb.thumbsUp > 0 && <span>{fb.thumbsUp}</span>}
+        </button>
+        <button
+          onClick={() => vote('down')}
+          className={`flex items-center gap-1 text-[13px] px-2 py-1 rounded-lg transition-colors ${
+            fb.userVote === 'down'
+              ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300'
+              : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'
+          }`}
+          title="Thumbs down"
+        >
+          <ThumbsDown size={16} />
+          {fb.thumbsDown > 0 && <span>{fb.thumbsDown}</span>}
+        </button>
+        <button
+          onClick={() => setShowComments(!showComments)}
+          className="md:hidden flex items-center gap-1 text-[13px] px-2 py-1 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+          title="Comments"
+        >
+          <MessageSquare size={14} />
+          {showComments ? 'Hide' : `View ${fb.comments.length}`}
+        </button>
       </div>
 
-      {/* Per-stop collaboration cards */}
-      {dayStops.length > 0 && (
-        <div className="space-y-3 pt-2">
-          <div className="text-[13px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
-            Stop Feedback
-          </div>
-          {dayStops.map(({ day, stops }) => (
-            <div key={day} className="space-y-2">
-              <div className="text-sm font-medium text-gray-700 dark:text-gray-300">Day {day}</div>
-              {stops.map((stop) => (
-                <div key={stop.id} className="border border-gray-100 dark:border-gray-700/50 rounded-xl p-2.5 bg-gray-50/50 dark:bg-gray-800/30">
-                  <div className="text-[13px] font-medium text-gray-800 dark:text-gray-200 flex items-center gap-1.5">
-                    <MapPin size={12} className="text-blue-500" />
-                    {stop.name}
-                  </div>
-                  <StopFeedbackBar
-                    stopId={stop.id}
-                    stopName={stop.name}
-                    trip={trip}
-                    onUpdate={onUpdate}
-                  />
-                </div>
-              ))}
+      <div className={`flex-1 min-h-0 ${showComments ? 'block' : 'hidden md:block'}`}>
+        <div className="max-h-80 overflow-y-auto py-2 space-y-2">
+          {fb.comments.map((c) => (
+            <div key={c.id} className="flex items-start gap-2 group">
+              <div className="flex-1 text-[13px] text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/50 rounded-lg px-2.5 py-1.5">
+                <span className="font-medium text-gray-700 dark:text-gray-300">{c.author}: </span>
+                {c.text}
+                <span className="text-gray-400 dark:text-gray-600 ml-1">· {formatDateTime(c.createdAt)}</span>
+              </div>
+              <button
+                onClick={() => deleteComment(c.id)}
+                className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-600 p-1"
+              >
+                <Trash2 size={12} />
+              </button>
             </div>
           ))}
         </div>
+      </div>
+
+      <div className={`pt-2 border-t border-gray-100 dark:border-gray-700/50 ${showComments ? 'block' : 'hidden md:block'}`}>
+        <div className="flex items-center gap-2">
+          <input
+            type="text"
+            value={commentText}
+            onChange={(e) => setCommentText(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && addComment()}
+            placeholder="Add a comment..."
+            className="flex-1 text-[13px] border border-gray-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-blue-400"
+          />
+          <button
+            onClick={addComment}
+            className="p-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+          >
+            <Plus size={14} />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// --- Itinerary tab with per-day feedback ---
+
+function ItineraryTab({ trip, onUpdate }: { trip: SavedTrip; onUpdate: (trip: SavedTrip) => void }) {
+  const payload = trip.payload;
+  const dayBlocks = splitItineraryByDay(payload.itinerary || '');
+
+  const markdownComponents = {
+    img: ({ src, alt }: any) => (
+      <figure className="my-3">
+        {src && <img src={src} alt={alt || ''} className="rounded-xl shadow-md w-full" loading="lazy" />}
+        {alt && <figcaption className="text-[13px] text-gray-400 dark:text-gray-500 text-center mt-1">{alt}</figcaption>}
+      </figure>
+    ),
+    h1: ({ children }: any) => <h1 className="text-lg font-bold text-gray-900 dark:text-gray-100 mt-2 mb-1">{children}</h1>,
+    h2: ({ children }: any) => <h2 className="text-base font-bold text-gray-900 dark:text-gray-100 mt-3 mb-1">{children}</h2>,
+    h3: ({ children }: any) => <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-200 mt-2 mb-1">{children}</h3>,
+    strong: ({ children }: any) => <strong className="font-semibold text-gray-900 dark:text-gray-100">{children}</strong>,
+    ul: ({ children }: any) => <ul className="list-disc list-inside my-2 space-y-0.5">{children}</ul>,
+    ol: ({ children }: any) => <ol className="list-decimal list-inside my-2 space-y-0.5">{children}</ol>,
+  };
+
+  return (
+    <div className="space-y-6">
+      {dayBlocks.map(({ day, content }, index) =>
+        day === undefined ? (
+          <div key={`intro-${index}`} className="prose prose-sm dark:prose-invert max-w-none text-gray-700 dark:text-gray-300">
+            <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{content}</ReactMarkdown>
+          </div>
+        ) : (
+          <div
+            key={day}
+            className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6 border-b border-gray-200 dark:border-gray-700/50 pb-6 last:border-0"
+          >
+            <div className="md:col-span-2 prose prose-sm dark:prose-invert max-w-none text-gray-700 dark:text-gray-300">
+              <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{content}</ReactMarkdown>
+            </div>
+            <div className="md:col-span-1 md:sticky md:top-4 md:self-start rounded-xl border border-gray-100 dark:border-gray-700/50 p-3 bg-gray-50/50 dark:bg-gray-800/30">
+              <div className="text-[13px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">
+                Day {day}
+              </div>
+              <DayFeedbackBar dayIndex={day} trip={trip} onUpdate={onUpdate} />
+            </div>
+          </div>
+        )
       )}
     </div>
   );
@@ -883,6 +1024,7 @@ export default function OneStopPanel({ isOpen, onClose, savedTrips, setSavedTrip
           todos: updated.todos,
           notes: updated.notes,
           feedback: updated.feedback || {},
+          dayFeedback: updated.dayFeedback || {},
           flightInfo: updated.flightInfo || [],
           documents: updated.documents || [],
         }),
