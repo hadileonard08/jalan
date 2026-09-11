@@ -54,16 +54,40 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-// Find a line containing a bold stop name (case-insensitive).
+// Find a line containing a bold stop name (case-insensitive and fuzzy).
 // Returns the line index or -1.
 function findStopLine(lines: string[], stopName: string): number {
   const lower = stopName.toLowerCase().trim();
+  const words = lower.split(/\s+/).filter(Boolean);
+  let bestIdx = -1;
+  let bestScore = 0;
+
   for (let i = 0; i < lines.length; i++) {
-    // Match: - **Stop Name** or **Stop Name** (with optional bullet/dash)
     const boldMatch = lines[i].match(/\*\*(.+?)\*\*/);
-    if (boldMatch && boldMatch[1].toLowerCase().trim() === lower) {
-      return i;
+    if (!boldMatch) continue;
+    const bold = boldMatch[1].toLowerCase().trim();
+    const boldWords = bold.split(/\s+/).filter(Boolean);
+
+    // Exact match — highest priority
+    if (bold === lower) return i;
+
+    // Substring containment in either direction
+    if (bold.includes(lower) || lower.includes(bold)) return i;
+
+    // Score by overlapping words
+    const overlap = words.filter((w) => boldWords.includes(w)).length;
+    if (overlap > bestScore) {
+      bestScore = overlap;
+      bestIdx = i;
     }
+  }
+
+  // Accept the best partial match if it shares at least 2 words or ≥50% of the target words
+  if (
+    bestIdx >= 0 &&
+    (bestScore >= 2 || (words.length > 0 && bestScore / words.length >= 0.5))
+  ) {
+    return bestIdx;
   }
   return -1;
 }
@@ -257,12 +281,14 @@ Instructions:
 - Output ONLY the specific edits needed to satisfy the request.
 - Do NOT rewrite the rest of the itinerary.
 - Use dayNumber (1-indexed) to target the correct day.
-- For replace_stop: provide targetStopName (exact name from the itinerary) and newDetails with the new name and/or description.
+- For replace_stop: provide targetStopName (the EXACT bolded stop name as it appears in the itinerary, or a short recognizable subset/keyword from it) and newDetails with the new name and/or description. The new name should be a real, well-known alternative for the destination.
+- For remove_stop: provide targetStopName of the stop to remove. If the user wants to drop a stop because they don't like it (e.g. "I don't drink beer", "replace the brewery"), use remove_stop and then optionally add_stop a replacement.
 - For add_stop: provide newDetails with name, description, and time_slot ("morning", "afternoon", or "evening").
-- For remove_stop: provide targetStopName of the stop to remove.
 - For update_note: provide targetStopName and newDetails.description with the updated description.
-- If the user's request doesn't map to any specific edit, return an empty edits array.
-- Match stop names exactly as they appear in the itinerary (case-sensitive).`;
+- If the user's request cannot be matched to a specific stop, use remove_stop for the closest bolded landmark and add_stop to insert a suitable replacement.
+- If the user is giving a dietary or preference constraint (e.g. "I don't drink beer", "no pork", "vegetarian"), remove the offending stop and add an appropriate alternative.
+- If the user's request doesn't map to any specific edit and is more of a vague style change, return an empty edits array.
+- Match stop names using the exact bolded text in the itinerary. Substrings and common keywords are acceptable (e.g. "Oktoberfest" can match a bolded stop like "Oktoberfest at Bavarian Bierhaus" or "Bavarian Bierhaus").`;
 
   // 3. Call the LLM with structured output.
   const model = getChatModel(0.2, 'gemini-3.5-flash-lite');

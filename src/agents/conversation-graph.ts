@@ -1015,10 +1015,12 @@ async function criticNode(state: typeof ConversationStateAnnotation.State) {
         : '',
     ].filter((feedback): feedback is string => feedback.length > 0);
     const feedback = [...guardrailsFeedback, ...evaluationFeedback];
+    // Refinements are user-driven edits. They don't have fresh retrieved context,
+    // so once guardrails are clean we should let the user's change through.
     const isApproved =
       guardrailsFeedback.length === 0 &&
-      evaluation.groundedness.score >= 4 &&
-      evaluation.answerRelevance.score >= 4;
+      (state.entities.intent === 'refine' ||
+        (evaluation.groundedness.score >= 4 && evaluation.answerRelevance.score >= 4));
 
     return {
       isApproved,
@@ -1045,8 +1047,9 @@ async function criticNode(state: typeof ConversationStateAnnotation.State) {
 function criticRouter(state: typeof ConversationStateAnnotation.State) {
   if (state.isApproved) return 'enrich';
   if (state.revisionCount >= 3) return 'reject';
-  // Route refine retries back to applyRefinements, not the full Generate node.
-  if (state.entities.intent === 'refine') return 'applyRefinements';
+  // First refine attempt uses the surgical patch. If that fails, fall back to
+  // a full regeneration so the user's constraint is still honored.
+  if (state.entities.intent === 'refine') return 'generate';
   return 'generate';
 }
 
