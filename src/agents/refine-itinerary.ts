@@ -252,11 +252,14 @@ export async function applyRefinements(
     userMessage: string;
     history: PersistedMessage[];
     draftItinerary: string;
-    entities: { destination?: string; intent?: string };
+    currentItinerary: string;
+    previousItineraries: string[];
+    entities: { destination?: string; intent?: string; refinementInstructions?: string };
   }
-): Promise<{ draftItinerary: string; itinerary: string }> {
-  // 1. Get the existing itinerary — prefer draftItinerary, then search history.
-  const existingItinerary = state.draftItinerary || extractExistingItinerary(state.history);
+): Promise<{ draftItinerary: string; itinerary: string; currentItinerary: string; previousItineraries: string[] }> {
+  // 1. Get the existing itinerary — prefer currentItinerary, then draftItinerary, then search history.
+  const existingItinerary =
+    state.currentItinerary || state.draftItinerary || extractExistingItinerary(state.history);
 
   if (!existingItinerary) {
     // No existing itinerary to refine — this shouldn't happen because the
@@ -266,7 +269,7 @@ export async function applyRefinements(
 
   // 2. Build the prompt for the LLM.
   const destination = state.entities.destination || 'the destination';
-  const userQuery = state.userMessage || state.userQuery;
+  const userQuery = state.entities.refinementInstructions || state.userMessage || state.userQuery;
 
   const prompt = `You are a surgical editor for travel itineraries.
 
@@ -303,8 +306,16 @@ Instructions:
   // 5. Apply the patch deterministically.
   const newItinerary = mergeItineraryPatch(existingItinerary, validated);
 
+  // 6. Preserve the unpatched version and set the new one as current.
+  const previousItineraries = [...state.previousItineraries];
+  if (existingItinerary && !previousItineraries.includes(existingItinerary)) {
+    previousItineraries.push(existingItinerary);
+  }
+
   return {
     draftItinerary: newItinerary,
     itinerary: newItinerary,
+    currentItinerary: newItinerary,
+    previousItineraries,
   };
 }

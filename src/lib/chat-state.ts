@@ -19,6 +19,7 @@ export interface ExtractedEntities {
   budget?: string;
   intent?: 'plan_trip' | 'ask_question' | 'refine' | 'greeting' | 'vague';
   interests?: string;
+  refinementInstructions?: string;
 }
 
 export interface ClarifyingQuestion {
@@ -104,6 +105,8 @@ export interface ConversationState {
   deals: any[];
   images: Record<string, string>;
   itinerary: string;
+  currentItinerary: string;
+  previousItineraries: string[];
   packingTips: string;
   criticFeedback: string[];
   isApproved: boolean;

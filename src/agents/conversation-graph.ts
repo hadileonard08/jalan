@@ -5,7 +5,7 @@ import { searchDestinationNews } from './news-search';
 import { getDestinationImageUrl, hydrateItineraryImages } from './destination-images';
 import { verifyItineraryLandmarks, buildRouteLinks } from './itinerary-guardrails';
 import { buildTransportPlan, injectTransportNotes } from './transport';
-import { applyRefinements } from './refine-itinerary';
+import { applyRefinements, extractExistingItinerary } from './refine-itinerary';
 import { db } from '../db';
 import { flights, deals } from '../db/schema';
 import { eq, gte, lte, inArray, and, sql } from 'drizzle-orm';
@@ -39,6 +39,8 @@ const ConversationStateAnnotation = Annotation.Root({
   retrievedContext: Annotation<string>({ reducer: (_curr, next) => next, default: () => '' }),
   draftItinerary: Annotation<string>({ reducer: (_curr, next) => next, default: () => '' }),
   dateValidationError: Annotation<string>({ reducer: (_curr, next) => next, default: () => '' }),
+  currentItinerary: Annotation<string>({ reducer: (_curr, next) => next, default: () => '' }),
+  previousItineraries: Annotation<string[]>({ reducer: (_curr, next) => next, default: () => [] }),
   history: Annotation<PersistedMessage[]>({ reducer: (_curr, next) => next, default: () => [] }),
   entities: Annotation<ExtractedEntities>({ reducer: (_curr, next) => next, default: () => ({}) }),
   userPreferences: Annotation<UserPreferences | null>({ reducer: (_curr, next) => next, default: () => null }),
@@ -82,10 +84,20 @@ async function extractNode(state: typeof ConversationStateAnnotation.State) {
     .map((m) => `${m.role}: ${m.content}`)
     .join('\n');
 
+  // Determine whether a previous itinerary exists so the router can treat
+  // follow-up tweaks as a `refine` intent.
+  const hasExistingItinerary =
+    state.currentItinerary?.length > 200 ||
+    state.history.some(
+      (m) => m.role === 'assistant' && (m.payload?.itinerary || m.content.length > 200)
+    );
+
   const prompt = `${COMPANION_PERSONA}
 
 You are also a detail extractor. Read the conversation and figure out the user's intent and trip details.
 Today is ${new Date().toISOString().split('T')[0]}.
+
+**Itinerary already exists in this conversation:** ${hasExistingItinerary ? 'YES' : 'NO'}
 
 Instructions:
 - If the user gives a month or date WITHOUT a year, resolve it to the next occurrence that is today or later.
@@ -96,13 +108,19 @@ Instructions:
 - If the user says "flexible" or similar, set datesGeneral to "flexible" and leave startDate null.
 - Do not mark startDate as missing if datesGeneral or durationDays is provided.
 - intent values:
-  - plan_trip: user wants an itinerary or help planning a trip (e.g. "Plan a trip to Tokyo", "I want to go to Seoul for 2 weeks")
+  - plan_trip: user wants a new itinerary or help planning a trip (e.g. "Plan a trip to Tokyo", "I want to go to Seoul for 2 weeks")
   - ask_question: user is asking a specific question OR looking for deals without a full itinerary (e.g. "When is the best time to visit Japan?", "find any deal to Tokyo in December", "show me cheap flights to Bangkok", "what's the weather like?")
-  - refine: user wants to change something about an earlier plan
+  - refine: user wants to change something about an earlier plan (e.g. "swap day 2 lunch for a vegan spot", "make it shorter", "I don't drink beer", "replace the brewery with a museum")
   - greeting: user just said hi or similar
   - vague: user's message is too vague to act on — no destination, no dates, no clear question (e.g. "I want to travel", "help me", "trips", "something fun")
 
-Optional fields: origin, endDate, cabin (ECONOMY | PREMIUM_ECONOMY | BUSINESS | FIRST), travelers, budget, interests.
+**CRITICAL refine rules (only when hasExistingItinerary === YES):**
+- If an itinerary already exists and the user asks to change, tweak, swap, or modify a specific day, meal, activity, or stop, you MUST classify the intent as "refine".
+- Do NOT classify tweaks as "plan_trip" or "ask_question".
+- Messages like "make it cheaper", "make it shorter", "swap day 2", "replace the brewery", "I don't drink beer", "add more museums", or "remove the shopping" are ALL "refine".
+- If the intent is "refine", also set "refinementInstructions" to the exact user request text, so the delta-update agent can apply it.
+
+Optional fields: origin, endDate, cabin (ECONOMY | PREMIUM_ECONOMY | BUSINESS | FIRST), travelers, budget, interests, refinementInstructions.
 
 The "interests" field should capture any specific themes, activities, or preferences the user mentioned — e.g. "football", "food and nightlife", "art museums", "hiking and nature", "anime and gaming", "history and architecture", "shopping". This is free-form text, not an enum. If the user didn't mention any specific interests, leave it null.
 
@@ -121,7 +139,8 @@ Respond ONLY in JSON:
     "travelers": 2,
     "budget": "string or null",
     "interests": "football, stadium tours" or null,
-    "intent": "plan_trip | ask_question | refine | greeting"
+    "intent": "plan_trip | ask_question | refine | greeting | vague",
+    "refinementInstructions": "exact user request for refine intent, or null"
   },
   "missingFields": ["field1", "field2"]
 }
@@ -235,6 +254,10 @@ User: ${state.userMessage}
     }
   }
 
+  // Seed currentItinerary from conversation history if the state doesn't
+  // already have it. This lets refine/applyRefinements use the latest plan.
+  const currentItinerary = state.currentItinerary || extractExistingItinerary(state.history);
+
   const stillMissing = REQUIRED_FIELDS.filter(
     (f) => !entities[f as keyof ExtractedEntities]
   );
@@ -244,6 +267,7 @@ User: ${state.userMessage}
     entities,
     dateValidationError,
     missingFields: stillMissing.length ? stillMissing : missingFields,
+    currentItinerary,
   };
 }
 
@@ -489,6 +513,12 @@ async function generateNode(state: typeof ConversationStateAnnotation.State) {
     : generatePackingTips(state);
   const [itinerary, packingTips] = await Promise.all([itineraryPromise, packingTipsPromise]);
 
+  // Preserve the previous itinerary before overwriting it.
+  const previousItineraries = [...state.previousItineraries];
+  if (state.currentItinerary && !previousItineraries.includes(state.currentItinerary)) {
+    previousItineraries.push(state.currentItinerary);
+  }
+
   return {
     retrievedContext: JSON.stringify({
       entities: state.entities,
@@ -499,6 +529,8 @@ async function generateNode(state: typeof ConversationStateAnnotation.State) {
     }),
     draftItinerary: itinerary,
     itinerary,
+    currentItinerary: itinerary,
+    previousItineraries,
     packingTips,
   };
 }
