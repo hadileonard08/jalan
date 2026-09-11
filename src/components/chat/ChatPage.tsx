@@ -580,12 +580,14 @@ function SidebarContent({
         >
           <Bookmark size={18} className="text-gray-500" /> One Stop
         </button>
-        <button
-          onClick={onOpenProfile}
-          className="w-full min-h-11 flex items-center gap-3 text-sm font-medium text-gray-800 dark:text-gray-100 hover:bg-black/[0.045] dark:hover:bg-white/[0.07] py-2.5 px-3 rounded-xl transition-colors"
-        >
-          <User size={18} className="text-gray-500" /> Profile
-        </button>
+        {isSignedIn && (
+          <button
+            onClick={onOpenProfile}
+            className="w-full min-h-11 flex items-center gap-3 text-sm font-medium text-gray-800 dark:text-gray-100 hover:bg-black/[0.045] dark:hover:bg-white/[0.07] py-2.5 px-3 rounded-xl transition-colors"
+          >
+            <User size={18} className="text-gray-500" /> Traveler Profile
+          </button>
+        )}
       </div>
       <div className="flex-1 overflow-y-auto px-3 py-2 space-y-0.5">
         <div className="text-[13px] font-medium text-gray-400 dark:text-gray-500 px-3 pb-1">Recent</div>
