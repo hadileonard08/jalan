@@ -20,6 +20,44 @@ export interface ClarifyingQuestion {
 }
 
 import type { TransportPlan } from '../agents/transport';
+import { z } from 'zod';
+
+// ---------------------------------------------------------------------------
+// Itinerary Patch Schema (Delta Update pattern for the refine intent)
+// ---------------------------------------------------------------------------
+// Instead of regenerating the entire itinerary when a user asks for a small
+// change, the LLM outputs a JSON array of specific edits. The deterministic
+// mergeItineraryPatch() reducer in src/agents/refine-itinerary.ts applies
+// them to the existing itinerary markdown.
+
+export const ItineraryPatchSchema = z.object({
+  edits: z.array(
+    z.object({
+      dayNumber: z.number().int().min(1).describe('The day number to edit (1-indexed)'),
+      action: z
+        .enum(['replace_stop', 'add_stop', 'remove_stop', 'update_note'])
+        .describe('The edit operation to perform'),
+      targetStopName: z
+        .string()
+        .optional()
+        .describe('The exact name of the stop to replace/remove/update. Required for replace_stop, remove_stop, and update_note. Omit for add_stop.'),
+      newDetails: z
+        .object({
+          name: z.string().optional().describe('New stop name (for replace_stop or add_stop)'),
+          description: z.string().optional().describe('New description text for the stop or note'),
+          time_slot: z
+            .string()
+            .optional()
+            .describe('Time slot for add_stop: "morning", "afternoon", or "evening"'),
+        })
+        .optional()
+        .describe('The new details for the stop. Required for replace_stop and add_stop.'),
+    })
+  ),
+});
+
+export type ItineraryPatch = z.infer<typeof ItineraryPatchSchema>;
+export type ItineraryEdit = ItineraryPatch['edits'][number];
 
 export interface RouteLink {
   day: string;

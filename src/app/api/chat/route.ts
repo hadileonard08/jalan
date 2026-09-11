@@ -72,6 +72,7 @@ export async function POST(req: Request) {
         clarify: 'Asking a quick question...',
         answer: 'Looking that up...',
         gather: 'Planning your trip...',
+        applyRefinements: 'Updating your itinerary...',
         critic: 'Double-checking...',
         enrich: 'Adding maps, transport & images...',
         respond: 'Finalizing...',

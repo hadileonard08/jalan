@@ -5,6 +5,7 @@ import { searchDestinationNews } from './news-search';
 import { getDestinationImageUrl, hydrateItineraryImages } from './destination-images';
 import { verifyItineraryLandmarks, buildRouteLinks } from './itinerary-guardrails';
 import { buildTransportPlan, injectTransportNotes } from './transport';
+import { applyRefinements } from './refine-itinerary';
 import { db } from '../db';
 import { flights, deals } from '../db/schema';
 import { eq, gte, lte, inArray, and, sql } from 'drizzle-orm';
@@ -426,7 +427,9 @@ function routeAfterExtract(state: typeof ConversationStateAnnotation.State) {
     if (state.missingFields.length > 0) return 'clarify';
     return 'answer';
   }
-  if (state.entities.intent === 'refine' && state.entities.destination) return 'gather';
+  // Refine intent: bypass Gather/Generate and go directly to the delta-update
+  // node, which surgically edits the existing itinerary from history.
+  if (state.entities.intent === 'refine' && state.entities.destination) return 'applyRefinements';
   if (state.missingFields.length > 0) return 'clarify';
   return 'gather';
 }
@@ -1038,6 +1041,8 @@ async function criticNode(state: typeof ConversationStateAnnotation.State) {
 function criticRouter(state: typeof ConversationStateAnnotation.State) {
   if (state.isApproved) return 'enrich';
   if (state.revisionCount >= 3) return 'reject';
+  // Route refine retries back to applyRefinements, not the full Generate node.
+  if (state.entities.intent === 'refine') return 'applyRefinements';
   return 'generate';
 }
 
@@ -1114,6 +1119,7 @@ export const conversationGraph = new StateGraph(ConversationStateAnnotation)
   .addNode('answer', answerNode)
   .addNode('gather', gatherNode)
   .addNode('generate', generateNode)
+  .addNode('applyRefinements', applyRefinements)
   .addNode('guardrails', guardrailsNode)
   .addNode('enrich', enrichNode)
   .addNode('critic', criticNode)
@@ -1125,6 +1131,7 @@ export const conversationGraph = new StateGraph(ConversationStateAnnotation)
   .addEdge('answer', END)
   .addEdge('gather', 'generate')
   .addEdge('generate', 'guardrails')
+  .addEdge('applyRefinements', 'guardrails')
   .addEdge('guardrails', 'critic')
   .addConditionalEdges('critic', criticRouter)
   .addEdge('enrich', 'respond')
