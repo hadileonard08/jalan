@@ -47,7 +47,7 @@ export default function DailyRouteMap({ waypoints, polyline, className = '' }: D
 
     const cartoKey = process.env.NEXT_PUBLIC_CARTO_API_KEY || '';
     const tileUrl = cartoKey
-      ? `https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png?api_key=${cartoKey}`
+      ? `https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png?key=${cartoKey}`
       : 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png';
 
     L.tileLayer(tileUrl, {
