@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@clerk/nextjs/server';
 import { db } from '../../../db';
 import { savedTrips } from '../../../db/schema';
-import { eq, desc } from 'drizzle-orm';
+import { eq, desc, and } from 'drizzle-orm';
 
 export const dynamic = 'force-dynamic';
 
@@ -56,6 +56,69 @@ export async function POST(req: NextRequest) {
 
     if (!destination || !payload) {
       return NextResponse.json({ error: 'destination and payload are required' }, { status: 400 });
+    }
+
+    // Duplicate detection: if the user already has a trip with the same
+    // conversationId (same chat) OR same destination + dates, return the
+    // existing trip instead of creating a duplicate.
+    const normalizedDates = (dates || 'Dates TBD').trim();
+
+    // Check by conversationId first (most reliable — same chat = same trip).
+    if (conversationId) {
+      const existingByConv = await db
+        .select()
+        .from(savedTrips)
+        .where(and(eq(savedTrips.userId, userId), eq(savedTrips.conversationId, conversationId)))
+        .limit(1);
+      if (existingByConv.length > 0) {
+        const t = existingByConv[0];
+        return NextResponse.json({
+          trip: {
+            id: t.id,
+            conversationId: t.conversationId || '',
+            destination: t.destination,
+            dates: t.dates || 'Dates TBD',
+            payload: JSON.parse(t.payload),
+            todos: JSON.parse(t.todos),
+            notes: t.notes,
+            feedback: JSON.parse(t.feedback || '{}'),
+            flightInfo: JSON.parse(t.flightInfo || '[]'),
+            documents: JSON.parse(t.documents || '[]'),
+            savedAt: t.createdAt.toISOString(),
+          },
+          duplicate: true,
+        });
+      }
+    }
+
+    // Check by destination + dates (same place, same dates = likely same trip).
+    const existingByDest = await db
+      .select()
+      .from(savedTrips)
+      .where(and(
+        eq(savedTrips.userId, userId),
+        eq(savedTrips.destination, destination),
+        eq(savedTrips.dates, normalizedDates),
+      ))
+      .limit(1);
+    if (existingByDest.length > 0) {
+      const t = existingByDest[0];
+      return NextResponse.json({
+        trip: {
+          id: t.id,
+          conversationId: t.conversationId || '',
+          destination: t.destination,
+          dates: t.dates || 'Dates TBD',
+          payload: JSON.parse(t.payload),
+          todos: JSON.parse(t.todos),
+          notes: t.notes,
+          feedback: JSON.parse(t.feedback || '{}'),
+          flightInfo: JSON.parse(t.flightInfo || '[]'),
+          documents: JSON.parse(t.documents || '[]'),
+          savedAt: t.createdAt.toISOString(),
+        },
+        duplicate: true,
+      });
     }
 
     const [trip] = await db

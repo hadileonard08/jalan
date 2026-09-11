@@ -683,6 +683,17 @@ export default function ChatPage() {
       ? `${startDate}${endDate ? ` - ${endDate}` : ''}`
       : payload.entities?.datesGeneral || 'Dates TBD';
 
+    // Client-side duplicate check: if a trip with the same conversationId
+    // or same destination + dates already exists, don't add a duplicate.
+    const isDuplicate = savedTrips.some((t) =>
+      (conversationId && t.conversationId === conversationId) ||
+      (t.destination === destination && t.dates === dates)
+    );
+    if (isDuplicate) {
+      setOneStopOpen(true);
+      return;
+    }
+
     if (isSignedIn) {
       // Save to server for signed-in users.
       try {
@@ -694,7 +705,10 @@ export default function ChatPage() {
         if (res.ok) {
           const data = await res.json();
           if (data.trip) {
-            setSavedTrips((prev) => [data.trip, ...prev]);
+            // Only add to list if it's not a duplicate of an existing trip.
+            if (!data.duplicate) {
+              setSavedTrips((prev) => [data.trip, ...prev]);
+            }
             setOneStopOpen(true);
             return;
           }
