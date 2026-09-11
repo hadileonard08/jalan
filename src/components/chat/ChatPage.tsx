@@ -4,12 +4,13 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Send, Plane, Loader2, History, Plus, LogIn, MapPin, Calendar, Sun, Wind, Droplets, Briefcase, Trash2, Bookmark, Map, Menu, X, List, Navigation, Share2, ChevronLeft, ChevronRight, Image as ImageIcon } from 'lucide-react';
+import { Send, Plane, Loader2, History, Plus, LogIn, MapPin, Calendar, Sun, Wind, Droplets, Briefcase, Trash2, Bookmark, Map, Menu, X, List, Navigation, Share2, ChevronLeft, ChevronRight, Image as ImageIcon, User } from 'lucide-react';
 import { useUser, SignInButtonWrapper, UserButtonWrapper } from '@/components/AuthProvider';
 import { getAirlineBookingUrl } from '@/lib/airline-booking';
 import useSWR, { mutate } from 'swr';
 import type { ChatMessageUI, ChatPayload, SavedTrip, RouteLink } from '@/lib/chat-state';
 import OneStopPanel from './OneStopPanel';
+import TravelerProfileModal from './TravelerProfileModal';
 import ThemeToggle from '@/components/ThemeToggle';
 import WalkersIcon from '@/components/WalkersIcon';
 import type { DayTransport } from '@/agents/transport';
@@ -553,6 +554,7 @@ function SidebarContent({
   onLoadConversation,
   onNewChat,
   onOpenOneStop,
+  onOpenProfile,
   isSignedIn,
 }: {
   conversations: Conversation[];
@@ -560,6 +562,7 @@ function SidebarContent({
   onLoadConversation: (id: string) => void;
   onNewChat: () => void;
   onOpenOneStop: () => void;
+  onOpenProfile: () => void;
   isSignedIn: boolean;
 }) {
   return (
@@ -576,6 +579,12 @@ function SidebarContent({
           className="w-full min-h-11 flex items-center gap-3 text-sm font-medium text-gray-800 dark:text-gray-100 hover:bg-black/[0.045] dark:hover:bg-white/[0.07] py-2.5 px-3 rounded-xl transition-colors"
         >
           <Bookmark size={18} className="text-gray-500" /> One Stop
+        </button>
+        <button
+          onClick={onOpenProfile}
+          className="w-full min-h-11 flex items-center gap-3 text-sm font-medium text-gray-800 dark:text-gray-100 hover:bg-black/[0.045] dark:hover:bg-white/[0.07] py-2.5 px-3 rounded-xl transition-colors"
+        >
+          <User size={18} className="text-gray-500" /> Profile
         </button>
       </div>
       <div className="flex-1 overflow-y-auto px-3 py-2 space-y-0.5">
@@ -631,6 +640,7 @@ export default function ChatPage() {
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [oneStopOpen, setOneStopOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
   const [shareUrls, setShareUrls] = useState<Record<string, string>>({});
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sectionsOpen, setSectionsOpen] = useState(false);
@@ -966,6 +976,7 @@ export default function ChatPage() {
             onLoadConversation={loadConversation}
             onNewChat={startNewChat}
             onOpenOneStop={() => setOneStopOpen(true)}
+            onOpenProfile={() => setProfileOpen(true)}
             isSignedIn={isSignedIn}
           />
         )}
@@ -991,6 +1002,7 @@ export default function ChatPage() {
               onLoadConversation={(id) => { loadConversation(id); setSidebarOpen(false); }}
               onNewChat={() => { startNewChat(); setSidebarOpen(false); }}
               onOpenOneStop={() => { setOneStopOpen(true); setSidebarOpen(false); }}
+              onOpenProfile={() => { setProfileOpen(true); setSidebarOpen(false); }}
               isSignedIn={isSignedIn}
             />
           </aside>
@@ -1237,6 +1249,11 @@ export default function ChatPage() {
           savedTrips={savedTrips}
           setSavedTrips={setSavedTrips}
           isSignedIn={isSignedIn}
+        />
+
+        <TravelerProfileModal
+          open={profileOpen}
+          onClose={() => setProfileOpen(false)}
         />
 
         {/* Input area */}

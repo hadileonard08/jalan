@@ -2,6 +2,9 @@ import { randomUUID } from 'crypto';
 import { auth } from '@clerk/nextjs/server';
 import { cookies } from 'next/headers';
 import { conversationGraph, generateTitle } from '@/agents/conversation-graph';
+import { db } from '@/db';
+import { userPreferences } from '@/db/schema';
+import { eq } from 'drizzle-orm';
 import {
   getOrCreateConversation,
   loadMessages,
@@ -9,12 +12,30 @@ import {
   updateConversationMetadata,
   updateConversationTitle,
 } from '@/lib/chat-db';
-import type { PersistedMessage, ChatPayload } from '@/lib/chat-state';
+import type { PersistedMessage, ChatPayload, UserPreferences } from '@/lib/chat-state';
 
 function getAuthUserId(): string | null {
   try {
     return auth().userId || null;
   } catch {
+    return null;
+  }
+}
+
+async function getUserPreferences(userId: string | null): Promise<UserPreferences | null> {
+  if (!userId) return null;
+  try {
+    const rows = await db.select().from(userPreferences).where(eq(userPreferences.userId, userId)).limit(1);
+    if (rows.length === 0) return null;
+    const row = rows[0];
+    return {
+      dietaryRestrictions: row.dietaryRestrictions,
+      transportPreference: row.transportPreference,
+      airlinePreference: row.airlinePreference,
+      generalNotes: row.generalNotes,
+    };
+  } catch (error) {
+    console.error('Failed to load user preferences:', error);
     return null;
   }
 }
@@ -82,8 +103,10 @@ export async function POST(req: Request) {
         let result: any = {};
         let previewSent = false;
 
+        const streamUserPreferences = await getUserPreferences(userId);
+
         const graphStream = await conversationGraph.stream(
-          { userMessage: message, history },
+          { userMessage: message, history, userPreferences: streamUserPreferences },
           { streamMode: 'updates' }
         );
 

@@ -1,3 +1,10 @@
+export interface UserPreferences {
+  dietaryRestrictions?: string | null;
+  transportPreference?: string | null;
+  airlinePreference?: string | null;
+  generalNotes?: string | null;
+}
+
 export interface ExtractedEntities {
   destination?: string;
   destinationCode?: string;
@@ -89,6 +96,7 @@ export interface ConversationState {
   userMessage: string;
   history: PersistedMessage[];
   entities: ExtractedEntities;
+  userPreferences?: UserPreferences | null;
   missingFields: string[];
   questions: ClarifyingQuestion[];
   weather: any | null;

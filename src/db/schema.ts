@@ -138,3 +138,17 @@ export const geocodedLocations = pgTable('geocoded_locations', {
   displayName: text('display_name'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
+
+// Global travel preferences for authenticated users, injected into the
+// LangGraph system prompt to personalize itineraries.
+export const userPreferences = pgTable('user_preferences', {
+  userId: varchar('user_id', { length: 255 }).primaryKey(),
+  dietaryRestrictions: text('dietary_restrictions'),
+  transportPreference: text('transport_preference'),
+  airlinePreference: text('airline_preference'),
+  generalNotes: text('general_notes'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (table) => ({
+  userIdx: index('user_preferences_user_id_idx').on(table.userId),
+}));

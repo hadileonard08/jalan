@@ -18,6 +18,7 @@ import type {
   ClarifyingQuestion,
   PersistedMessage,
   RouteLink,
+  UserPreferences,
 } from '../lib/chat-state';
 import { evaluateRag, type RagEvaluation } from '../lib/ragEvaluator';
 
@@ -40,6 +41,7 @@ const ConversationStateAnnotation = Annotation.Root({
   dateValidationError: Annotation<string>({ reducer: (_curr, next) => next, default: () => '' }),
   history: Annotation<PersistedMessage[]>({ reducer: (_curr, next) => next, default: () => [] }),
   entities: Annotation<ExtractedEntities>({ reducer: (_curr, next) => next, default: () => ({}) }),
+  userPreferences: Annotation<UserPreferences | null>({ reducer: (_curr, next) => next, default: () => null }),
   missingFields: Annotation<string[]>({ reducer: (_curr, next) => next, default: () => [] }),
   questions: Annotation<ClarifyingQuestion[]>({ reducer: (_curr, next) => next, default: () => [] }),
   weather: Annotation<unknown | null>({ reducer: (_curr, next) => next, default: () => null }),
@@ -822,6 +824,8 @@ Critic feedback to address:
 ${feedback}
 
 ${feedback.includes('image placeholder') ? '⚠️ CRITICAL: The previous version was missing image placeholders. You MUST include ![IMAGE: landmark name] after EVERY day heading. This is non-negotiable.' : ''}
+
+${state.userPreferences ? `The user has the following global travel preferences. Strictly adhere to these when recommending food, transport, and flights:\n${JSON.stringify(state.userPreferences, null, 2)}\n` : ''}
 
 Requirements:
 - Start with a brief, friendly intro sentence (1-2 lines) before the itinerary.
