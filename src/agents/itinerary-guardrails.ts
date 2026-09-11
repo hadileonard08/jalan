@@ -101,8 +101,9 @@ function isRouteCandidate(text: string): boolean {
   if (cleaned.length < 3) return false;
   if (cleaned.toLowerCase().startsWith('day ')) return false;
   if (GENERIC_ROUTE_WORDS.has(cleaned.toLowerCase())) return false;
-  // Ignore bullet/section labels like "Morning:", "Afternoon:"
-  if (/^(morning|afternoon|evening|lunch|dinner|breakfast|snack|hotel|airport)$/i.test(cleaned)) return false;
+  // Ignore time-slot section headings like "🌅 Morning:", "🌞 Afternoon:", "🌙 Evening:"
+  // (with or without emoji prefix and trailing colon).
+  if (/^(?:[🌅🌞🌙]\s*)?(?:morning|afternoon|evening|lunch|dinner|breakfast|snack|hotel|airport)\s*:?\s*$/i.test(cleaned)) return false;
   // Ignore transit-mode names like "JR Yamanote Line", "Tokyo Metro", etc.
   if (TRANSIT_ROUTE_WORDS.test(cleaned)) return false;
   return true;

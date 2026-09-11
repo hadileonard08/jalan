@@ -257,7 +257,8 @@ export function extractStopsWithTimeSlots(dayBlock: string): { name: string; tim
     for (const m of text.matchAll(/\*\*(.*?)\*\*/g)) {
       const name = m[1].trim();
       if (name.length < 3) continue;
-      if (/^(morning|afternoon|evening|lunch|dinner|breakfast|snack)$/i.test(name)) continue;
+      // Skip time-slot headings like "🌅 Morning:", "🌞 Afternoon:", "🌙 Evening:"
+      if (/^(?:[🌅🌞🌙]\s*)?(?:morning|afternoon|evening|lunch|dinner|breakfast|snack)\s*:?\s*$/i.test(name)) continue;
       if (/\b(line|subway|metro|train|railway|station|airport|bus|taxi|walk|transfer|fare|ticket|pass)\b/i.test(name)) continue;
       const key = name.toLowerCase();
       if (!seen.has(key)) {
