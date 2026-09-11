@@ -3,17 +3,10 @@ import { NextResponse } from 'next/server';
 
 const clerkConfigured =
   !!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY &&
-  !process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY.startsWith('pk_test_') &&
   !process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY.startsWith('pk_test_...');
 
 export default clerkConfigured
-  ? clerkMiddleware(
-      async () => NextResponse.next(),
-      {
-        proxyUrl: '/__clerk',
-        domain: 'jalan-ai.vercel.app',
-      },
-    )
+  ? clerkMiddleware(async () => NextResponse.next())
   : async () => NextResponse.next();
 
 export const config = {

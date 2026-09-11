@@ -17,14 +17,6 @@ const nextConfig = {
     }
     return config;
   },
-  async rewrites() {
-    return [
-      {
-        source: '/__clerk/:path*',
-        destination: 'https://clerk.jalan-ai.vercel.app/:path*',
-      },
-    ];
-  },
   async headers() {
     return [
       {
