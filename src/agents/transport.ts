@@ -435,16 +435,29 @@ async function buildDayTransport(
 
   // If we have time-slot info, run the route optimizer to reorder waypoints
   // to minimize travel time while respecting morning→afternoon→evening order.
+  // Airport/departure stops are anchored as the last stop and excluded from
+  // reordering (they must always be the final destination).
+  const isDepartureStop = (name: string): boolean =>
+    /\b(airport|sea-?tac|departure|fly|flight|check-?in|boarding|terminal)\b/i.test(name);
+
   if (dayTimeSlots && dayTimeSlots.length > 0 && waypoints.length > 2) {
-    // Match each waypoint to its time slot by name (case-insensitive).
+    // Separate departure stops (anchored last) from optimizable stops.
+    const departureWps: RouteWaypoint[] = [];
+    const regularWps: RouteWaypoint[] = [];
+    for (const wp of waypoints) {
+      if (isDepartureStop(wp.name)) departureWps.push(wp);
+      else regularWps.push(wp);
+    }
+
+    // Match each regular waypoint to its time slot by name (case-insensitive).
     const slotByName = new Map<string, TimeSlot>();
     for (const s of dayTimeSlots) {
       slotByName.set(s.name.toLowerCase().trim(), s.timeSlot);
     }
     const optimizable: OptimizableStop[] = [];
     const matchedIndexes: number[] = [];
-    for (let i = 0; i < waypoints.length; i++) {
-      const wp = waypoints[i];
+    for (let i = 0; i < regularWps.length; i++) {
+      const wp = regularWps[i];
       const slot = slotByName.get(wp.name.toLowerCase().trim());
       if (slot) {
         optimizable.push({ name: wp.name, lat: wp.lat, lon: wp.lon, timeSlot: slot });
@@ -455,18 +468,23 @@ async function buildDayTransport(
     if (optimizable.length > 2) {
       try {
         const optimized = await optimizeDayRoute(optimizable);
-        // Rebuild waypoints: optimized matched stops first, then unmatched stops appended in original order.
+        // Rebuild waypoints: optimized matched stops first, then unmatched
+        // regular stops, then departure stops anchored at the end.
         const optimizedWaypoints: RouteWaypoint[] = optimized.map((o) => ({
           name: o.name,
           lat: o.lat,
           lon: o.lon,
-          order: 0, // will set below
+          order: 0,
         }));
         const matchedSet = new Set(matchedIndexes);
-        for (let i = 0; i < waypoints.length; i++) {
+        for (let i = 0; i < regularWps.length; i++) {
           if (!matchedSet.has(i)) {
-            optimizedWaypoints.push({ ...waypoints[i], order: 0 });
+            optimizedWaypoints.push({ ...regularWps[i], order: 0 });
           }
+        }
+        // Append departure stops at the end (never reordered).
+        for (const dw of departureWps) {
+          optimizedWaypoints.push({ ...dw, order: 0 });
         }
         waypoints = optimizedWaypoints.map((wp, i) => ({ ...wp, order: i + 1 }));
         // Rebuild segments and geocoded arrays in the optimized order for leg computation.
