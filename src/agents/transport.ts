@@ -112,22 +112,73 @@ async function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Cache for city center coordinates — used to validate day-trip destinations.
+const cityCenterCache = new Map<string, { lat: number; lon: number } | null>();
+
+async function getCityCenter(city: string): Promise<{ lat: number; lon: number } | null> {
+  const cityKey = city.toLowerCase().split(',')[0].trim();
+  if (cityCenterCache.has(cityKey)) return cityCenterCache.get(cityKey)!;
+
+  const headers = { 'User-Agent': 'flight-deal-dashboard/1.0 (transport agent)' };
+  try {
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(city)}&format=json&limit=1`,
+      { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }
+    );
+    if (res.ok) {
+      const data = (await res.json()) as any[];
+      if (data && data.length > 0) {
+        const center = { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) };
+        cityCenterCache.set(cityKey, center);
+        return center;
+      }
+    }
+  } catch { /* ignore */ }
+  cityCenterCache.set(cityKey, null);
+  return null;
+}
+
+// Haversine distance in km.
+function distanceKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
 async function geocodeNominatim(place: string, city: string): Promise<GeocodeResult | null> {
   const headers = { 'User-Agent': 'flight-deal-dashboard/1.0 (transport agent)' };
   const cityLower = city.toLowerCase().split(',')[0].trim();
 
-  const validateResult = (item: any): GeocodeResult | null => {
+  // Two-tier validation:
+  // 1. If display name contains the city → accept (in-city landmark).
+  // 2. If within 200km of city center → accept (day-trip destination like
+  //    Mount Rainier from Seattle, Versailles from Paris).
+  // 3. Otherwise → reject (wrong city/country).
+  const MAX_DAY_TRIP_KM = 200;
+
+  const validateResult = async (item: any): Promise<GeocodeResult | null> => {
     if (!item || !item.lat || !item.lon) return null;
     const displayName = (item.display_name || '').toLowerCase();
-    // Accept the result only if the display name contains the city name.
-    // This prevents stops from spreading across the world when a landmark
-    // name exists in multiple cities.
-    if (!displayName.includes(cityLower)) return null;
-    return {
-      lat: parseFloat(item.lat),
-      lon: parseFloat(item.lon),
-      displayName: item.display_name,
-    };
+    const lat = parseFloat(item.lat);
+    const lon = parseFloat(item.lon);
+
+    // Tier 1: display name contains the city.
+    if (displayName.includes(cityLower)) {
+      return { lat, lon, displayName: item.display_name };
+    }
+
+    // Tier 2: within day-trip distance of the city center.
+    const center = await getCityCenter(city);
+    if (center) {
+      const dist = distanceKm(center.lat, center.lon, lat, lon);
+      if (dist <= MAX_DAY_TRIP_KM) {
+        return { lat, lon, displayName: item.display_name };
+      }
+    }
+
+    return null;
   };
 
   const runRequest = async () => {
@@ -136,7 +187,7 @@ async function geocodeNominatim(place: string, city: string): Promise<GeocodeRes
         // Primary: full-text query with city appended.
         const query = encodeURIComponent(`${place}, ${city}`);
         const res = await fetch(
-          `https://nominatim.openstreetmap.org/search?q=${query}&format=json&limit=3`,
+          `https://nominatim.openstreetmap.org/search?q=${query}&format=json&limit=5`,
           { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }
         );
         if (res.status === 429) {
@@ -146,38 +197,35 @@ async function geocodeNominatim(place: string, city: string): Promise<GeocodeRes
         if (res.ok) {
           const data = (await res.json()) as any[];
           if (data && data.length > 0) {
-            // Try each result until we find one in the right city.
             for (const item of data) {
-              const validated = validateResult(item);
+              const validated = await validateResult(item);
               if (validated) return validated;
             }
           }
         }
 
-        // Fallback: structured search with city parameter.
-        const cityParam = encodeURIComponent(city);
+        // Fallback: search place name alone (for day-trip destinations
+        // like "Mount Rainier National Park" that aren't in the city).
+        // The distance validation prevents wrong-country results.
         const placeParam = encodeURIComponent(place);
-        const structuredRes = await fetch(
-          `https://nominatim.openstreetmap.org/search?q=${placeParam}&city=${cityParam}&format=json&limit=3`,
+        const placeRes = await fetch(
+          `https://nominatim.openstreetmap.org/search?q=${placeParam}&format=json&limit=5`,
           { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }
         );
-        if (structuredRes.status === 429) {
+        if (placeRes.status === 429) {
           await sleep(800 * (attempt + 1));
           continue;
         }
-        if (structuredRes.ok) {
-          const structData = (await structuredRes.json()) as any[];
-          if (structData && structData.length > 0) {
-            for (const item of structData) {
-              const validated = validateResult(item);
+        if (placeRes.ok) {
+          const placeData = (await placeRes.json()) as any[];
+          if (placeData && placeData.length > 0) {
+            for (const item of placeData) {
+              const validated = await validateResult(item);
               if (validated) return validated;
             }
           }
         }
 
-        // If we can't find it in the specified city, return null rather
-        // than falling back to a global search that could return a
-        // location in a completely different city/country.
         return null;
       } catch {
         return null;
@@ -214,9 +262,9 @@ export async function geocode(place: string, city: string): Promise<GeocodeResul
       .where(eq(geocodedLocations.queryKey, queryKey))
       .limit(1);
     if (cached.length > 0) {
-      // Validate cached result: the display name should contain the city.
-      // Old cache entries from the pre-validation fallback may have wrong
-      // coordinates (e.g. a Seattle landmark geocoded to another city).
+      // Validate cached result: either the display name contains the city
+      // (in-city landmark) OR the coordinates are within 200km of the city
+      // center (day-trip destination like Mount Rainier from Seattle).
       const cachedCity = city.toLowerCase().split(',')[0].trim();
       const cachedDisplay = (cached[0].displayName || '').toLowerCase();
       if (cachedDisplay.includes(cachedCity)) {
@@ -225,6 +273,18 @@ export async function geocode(place: string, city: string): Promise<GeocodeResul
           lon: cached[0].lon,
           displayName: cached[0].displayName || '',
         };
+      }
+      // Check distance to city center for day-trip destinations.
+      const center = await getCityCenter(city);
+      if (center) {
+        const dist = distanceKm(center.lat, center.lon, cached[0].lat, cached[0].lon);
+        if (dist <= 200) {
+          return {
+            lat: cached[0].lat,
+            lon: cached[0].lon,
+            displayName: cached[0].displayName || '',
+          };
+        }
       }
       // Cache entry is stale/wrong — delete it and re-geocode.
       try {
