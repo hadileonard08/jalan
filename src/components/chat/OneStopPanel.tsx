@@ -1141,12 +1141,12 @@ function WeatherTab({ trip }: { trip: SavedTrip }) {
 // --- Proposals (multiplayer AI collaboration) ---
 
 // Display names for the trip roles. The trip's creator is the Master Planner;
-// a co-planner is a Master Planner Disciple; everyone else is a Follower.
+// a co-planner is a Master Planner Support; everyone else is a Follower.
 type TripRole = 'owner' | 'co-planner' | 'collaborator';
 
 const ROLE_LABELS: Record<TripRole, string> = {
   owner: 'Master Planner',
-  'co-planner': 'Master Planner Disciple',
+  'co-planner': 'Master Planner Support',
   collaborator: 'Follower',
 };
 
@@ -1158,7 +1158,7 @@ const ROLE_BADGE_STYLES: Record<TripRole, string> = {
 
 const ROLE_TOOLTIPS: Record<TripRole, string> = {
   owner: 'You are the Master Planner: you can suggest, accept, or reject changes.',
-  'co-planner': 'You are a Master Planner Disciple: you can suggest and approve changes.',
+  'co-planner': 'You are a Master Planner Support: you can suggest and approve changes.',
   collaborator: 'You are a Follower: you can suggest changes, and the Master Planner approves them.',
 };
 
@@ -1574,7 +1574,7 @@ function TripSharingModal({ trip, onClose }: { trip: SavedTrip; onClose: () => v
           <div className="grid grid-cols-2 gap-2">
             {([
               { value: 'collaborator', label: 'Follower', hint: 'Can suggest & comment' },
-              { value: 'owner', label: 'Master Planner Disciple', hint: 'Can also approve' },
+              { value: 'owner', label: 'Master Planner Support', hint: 'Can also approve' },
             ] as const).map((option) => (
               <button
                 key={option.value}
@@ -1609,7 +1609,7 @@ function TripSharingModal({ trip, onClose }: { trip: SavedTrip; onClose: () => v
               </button>
             </div>
             <p className="text-[12px] text-gray-500 dark:text-gray-400">
-              Anyone with this link joins as a {inviteRole === 'owner' ? 'Master Planner Disciple' : 'Follower'} after signing in. Links expire in 30 days.
+              Anyone with this link joins as a {inviteRole === 'owner' ? 'Master Planner Support' : 'Follower'} after signing in. Links expire in 30 days.
             </p>
           </div>
         ) : (

@@ -35,7 +35,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 // PATCH /api/saved-trips/[id] — update a saved trip.
 // Body: { todos?, notes?, feedback?, dayFeedback?, flightInfo?, documents? }
 // The itinerary itself is only changed through proposals, so owners,
-// Disciples, and Followers can all update the collaborative fields.
+// Support, and Followers can all update the collaborative fields.
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const userId = auth().userId;
@@ -101,7 +101,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 }
 
 // DELETE /api/saved-trips/[id] — delete a saved trip (owner level only).
-// Followers and Disciples leave a trip through the members endpoint instead.
+// Followers and Support leave a trip through the members endpoint instead.
 export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const userId = auth().userId;

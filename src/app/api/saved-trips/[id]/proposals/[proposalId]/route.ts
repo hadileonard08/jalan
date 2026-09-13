@@ -53,7 +53,7 @@ export async function PATCH(
       return NextResponse.json({ error: 'action must be "accept" or "reject"' }, { status: 400 });
     }
 
-    // Only the Master Planner or a Disciple may review proposals.
+    // Only the Master Planner or Master Planner Support may review proposals.
     const { trip, role } = await getTripAccess(tripId, userId);
     if (!trip) {
       return NextResponse.json({ error: 'Trip not found' }, { status: 404 });

@@ -89,7 +89,7 @@ export default function InvitePage() {
               </div>
               <p className="text-[12px] text-gray-500 dark:text-gray-400 mt-1">
                 {info.invite.role === 'owner'
-                  ? 'Disciples can suggest changes and approve them.'
+                  ? 'Master Planner Support can suggest changes and approve them.'
                   : 'Followers can suggest changes and comment. The Master Planner approves them.'}
               </p>
             </div>

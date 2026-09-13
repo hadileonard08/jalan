@@ -52,7 +52,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 }
 
 // POST /api/saved-trips/[id]/invites — create an invite link (owner level only).
-// Body: { role: 'owner' | 'collaborator' }  ('owner' = Master Planner Disciple)
+// Body: { role: 'owner' | 'collaborator' }  ('owner' = Master Planner Support)
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const userId = auth().userId;

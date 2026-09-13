@@ -3,7 +3,7 @@ import { savedTrips, tripCollaborators } from '../db/schema';
 import { eq, and } from 'drizzle-orm';
 
 // The trip's creator is the Master Planner. A trip_collaborators row with
-// role 'owner' is a Master Planner Disciple (co-planner); anything else in
+// role 'owner' is a Master Planner Support (co-planner); anything else in
 // that table is a Follower (collaborator).
 export type TripRole = 'owner' | 'co-planner' | 'collaborator';
 

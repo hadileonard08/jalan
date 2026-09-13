@@ -172,7 +172,7 @@ export const tripCollaborators = pgTable('trip_collaborators', {
   tripIdx: index('trip_collaborators_trip_id_idx').on(table.tripId),
 }));
 
-// Invite links that add a signed-in user to a saved trip as a Disciple
+// Invite links that add a signed-in user to a saved trip as Master Planner Support
 // (owner-level) or a Follower (collaborator).
 export const tripInvites = pgTable('trip_invites', {
   id: uuid('id').primaryKey().defaultRandom(),

@@ -7,7 +7,7 @@ import { and, eq } from 'drizzle-orm';
 export const dynamic = 'force-dynamic';
 
 function roleLabel(role: 'owner' | 'collaborator') {
-  return role === 'owner' ? 'Master Planner Disciple' : 'Follower';
+  return role === 'owner' ? 'Master Planner Support' : 'Follower';
 }
 
 async function loadInvite(token: string) {
