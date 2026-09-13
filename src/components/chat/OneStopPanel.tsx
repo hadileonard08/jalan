@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import {
   X, Plus, Trash2, CheckSquare, Square, Plane, Clipboard, StickyNote,
@@ -411,7 +411,10 @@ function ItineraryTab({
   submittingDay,
   onSubmitProposal,
   onReviewProposal,
+  onEditProposal,
+  onWithdrawProposal,
   proposalActionId,
+  userId,
 }: {
   trip: SavedTrip;
   onUpdate: (trip: SavedTrip) => void;
@@ -420,7 +423,10 @@ function ItineraryTab({
   submittingDay: number | null;
   onSubmitProposal: (day: number, prompt: string) => Promise<boolean>;
   onReviewProposal: (proposalId: string, action: 'accept' | 'reject') => void;
+  onEditProposal: (proposalId: string, prompt: string) => Promise<boolean>;
+  onWithdrawProposal: (proposalId: string) => void;
   proposalActionId: string | null;
+  userId?: string;
 }) {
   const payload = trip.payload;
   // Saved plans shouldn't include the assistant's closing follow-up questions.
@@ -477,7 +483,10 @@ function ItineraryTab({
                 submitting={submittingDay === day}
                 onSubmit={onSubmitProposal}
                 onReview={onReviewProposal}
+                onEdit={onEditProposal}
+                onWithdraw={onWithdrawProposal}
                 actionId={proposalActionId}
+                userId={userId}
               />
             </div>
           </div>
@@ -488,7 +497,10 @@ function ItineraryTab({
         role={proposalRole}
         proposals={unassignedProposals}
         onReview={onReviewProposal}
+        onEdit={onEditProposal}
+        onWithdraw={onWithdrawProposal}
         actionId={proposalActionId}
+        userId={userId}
       />
     </div>
   );
@@ -1106,21 +1118,73 @@ const PROPOSAL_STATUS_STYLES: Record<TripProposal['status'], string> = {
 function ProposalCard({
   proposal,
   canReview,
+  canEdit,
   actionId,
   onReview,
+  onEdit,
+  onWithdraw,
 }: {
   proposal: TripProposal;
   canReview: boolean;
+  canEdit: boolean;
   actionId: string | null;
   onReview: (proposalId: string, action: 'accept' | 'reject') => void;
+  onEdit: (proposalId: string, prompt: string) => Promise<boolean>;
+  onWithdraw: (proposalId: string) => void;
 }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(proposal.suggestedPrompt);
+  const [regenerating, setRegenerating] = useState(false);
+  const pending = proposal.status === 'pending';
+
+  const saveEdit = async () => {
+    if (!draft.trim() || regenerating) return;
+    setRegenerating(true);
+    const ok = await onEdit(proposal.id, draft.trim());
+    setRegenerating(false);
+    if (ok) setEditing(false);
+  };
+
   return (
     <div className="border border-gray-200 dark:border-gray-700 rounded-xl p-2.5 bg-white dark:bg-gray-800 space-y-2">
-      <div className="text-[13px] text-gray-900 dark:text-gray-100">&ldquo;{proposal.suggestedPrompt}&rdquo;</div>
+      {editing ? (
+        <div className="space-y-2">
+          <input
+            type="text"
+            value={draft}
+            autoFocus
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && saveEdit()}
+            disabled={regenerating}
+            className="w-full text-[13px] border border-gray-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-blue-400 disabled:opacity-60"
+          />
+          <div className="flex items-center gap-2">
+            <button
+              onClick={saveEdit}
+              disabled={regenerating || !draft.trim()}
+              className="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 text-[13px] font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+            >
+              {regenerating ? <span className="animate-spin">⟳</span> : <Sparkles size={13} />}
+              {regenerating ? 'Regenerating…' : 'Regenerate'}
+            </button>
+            <button
+              onClick={() => { setEditing(false); setDraft(proposal.suggestedPrompt); }}
+              disabled={regenerating}
+              className="px-3 py-1.5 text-[13px] font-medium rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="text-[13px] text-gray-900 dark:text-gray-100">&ldquo;{proposal.suggestedPrompt}&rdquo;</div>
+      )}
+
       <div className="text-[12px] text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-900/40 rounded-lg p-2">
         <span className="font-medium text-gray-600 dark:text-gray-300">AI patch:</span> {formatPatchPreview(proposal.patchData)}
       </div>
-      {canReview && proposal.status === 'pending' ? (
+
+      {canReview && pending ? (
         <div className="flex items-center gap-2">
           <button
             onClick={() => onReview(proposal.id, 'accept')}
@@ -1144,6 +1208,23 @@ function ProposalCard({
           {proposal.status}
         </span>
       )}
+
+      {canEdit && pending && !editing && (
+        <div className="flex items-center gap-3 pt-0.5">
+          <button
+            onClick={() => setEditing(true)}
+            className="text-[12px] font-medium text-blue-600 dark:text-blue-400 hover:underline"
+          >
+            Edit & regenerate
+          </button>
+          <button
+            onClick={() => onWithdraw(proposal.id)}
+            className="text-[12px] font-medium text-gray-400 dark:text-gray-500 hover:text-red-600 hover:underline"
+          >
+            Withdraw
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -1156,7 +1237,10 @@ function DayProposalBox({
   submitting,
   onSubmit,
   onReview,
+  onEdit,
+  onWithdraw,
   actionId,
+  userId,
 }: {
   day: number;
   role: TripRole | null;
@@ -1164,7 +1248,10 @@ function DayProposalBox({
   submitting: boolean;
   onSubmit: (day: number, prompt: string) => Promise<boolean>;
   onReview: (proposalId: string, action: 'accept' | 'reject') => void;
+  onEdit: (proposalId: string, prompt: string) => Promise<boolean>;
+  onWithdraw: (proposalId: string) => void;
   actionId: string | null;
+  userId?: string;
 }) {
   const [input, setInput] = useState('');
   const canReview = canReviewRole(role);
@@ -1212,8 +1299,11 @@ function DayProposalBox({
               key={proposal.id}
               proposal={proposal}
               canReview={canReview}
+              canEdit={!!userId && proposal.proposedByUserId === userId}
               actionId={actionId}
               onReview={onReview}
+              onEdit={onEdit}
+              onWithdraw={onWithdraw}
             />
           ))}
         </div>
@@ -1227,12 +1317,18 @@ function UnassignedProposals({
   role,
   proposals,
   onReview,
+  onEdit,
+  onWithdraw,
   actionId,
+  userId,
 }: {
   role: TripRole | null;
   proposals: TripProposal[];
   onReview: (proposalId: string, action: 'accept' | 'reject') => void;
+  onEdit: (proposalId: string, prompt: string) => Promise<boolean>;
+  onWithdraw: (proposalId: string) => void;
   actionId: string | null;
+  userId?: string;
 }) {
   if (proposals.length === 0 || role === null) return null;
   return (
@@ -1245,8 +1341,11 @@ function UnassignedProposals({
           key={proposal.id}
           proposal={proposal}
           canReview={canReviewRole(role)}
+          canEdit={!!userId && proposal.proposedByUserId === userId}
           actionId={actionId}
           onReview={onReview}
+          onEdit={onEdit}
+          onWithdraw={onWithdraw}
         />
       ))}
     </div>
@@ -1259,12 +1358,18 @@ function PendingSuggestionsModal({
   proposals,
   actionId,
   onReview,
+  onEdit,
+  onWithdraw,
   onClose,
+  userId,
 }: {
   proposals: TripProposal[];
   actionId: string | null;
   onReview: (proposalId: string, action: 'accept' | 'reject') => void;
+  onEdit: (proposalId: string, prompt: string) => Promise<boolean>;
+  onWithdraw: (proposalId: string) => void;
   onClose: () => void;
+  userId?: string;
 }) {
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
@@ -1286,8 +1391,11 @@ function PendingSuggestionsModal({
             key={proposal.id}
             proposal={proposal}
             canReview
+            canEdit={!!userId && proposal.proposedByUserId === userId}
             actionId={actionId}
             onReview={onReview}
+            onEdit={onEdit}
+            onWithdraw={onWithdraw}
           />
         ))}
       </div>
@@ -1478,7 +1586,8 @@ function TripSharingModal({ trip, onClose }: { trip: SavedTrip; onClose: () => v
 
 // --- SavedTripCard ---
 
-function SavedTripCard({ trip, onUpdate, onDelete, onLeave, isSignedIn, isOpen }: { trip: SavedTrip; onUpdate: (trip: SavedTrip) => void; onDelete?: () => void; onLeave?: () => void; isSignedIn: boolean; isOpen: boolean }) {
+function SavedTripCard({ trip, onUpdate, onDelete, onLeave, onPayloadRefresh, isSignedIn, isOpen }: { trip: SavedTrip; onUpdate: (trip: SavedTrip) => void; onDelete?: () => void; onLeave?: () => void; onPayloadRefresh: (tripId: string, payload: ChatPayload) => void; isSignedIn: boolean; isOpen: boolean }) {
+  const { user } = useUser();
   const [activeTab, setActiveTab] = useState<'itinerary' | 'weather' | 'routes' | 'flights' | 'packing' | 'todos' | 'notes'>('itinerary');
   const [todoText, setTodoText] = useState('');
   const [noteText, setNoteText] = useState('');
@@ -1489,8 +1598,9 @@ function SavedTripCard({ trip, onUpdate, onDelete, onLeave, isSignedIn, isOpen }
   const [sharingOpen, setSharingOpen] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
 
-  // Load collaboration role and pending proposals for this trip, and refresh
-  // them while One Stop is open so new suggestions show up on their own.
+  // Load collaboration role and pending proposals for this trip, and keep
+  // refreshing while One Stop is open so new suggestions — and itinerary
+  // changes accepted by another collaborator — show up without a reload.
   useEffect(() => {
     if (!isSignedIn) return;
     let cancelled = false;
@@ -1506,12 +1616,25 @@ function SavedTripCard({ trip, onUpdate, onDelete, onLeave, isSignedIn, isOpen }
         .catch(() => {});
     };
 
+    const loadTrip = () => {
+      fetch(`/api/saved-trips/${trip.id}`)
+        .then((r) => r.json())
+        .then((data) => {
+          if (cancelled) return;
+          const fresh = data.trip?.payload?.itinerary;
+          if (typeof fresh === 'string' && fresh !== trip.payload.itinerary) {
+            onPayloadRefresh(trip.id, data.trip.payload);
+          }
+        })
+        .catch(() => {});
+    };
+
     loadProposals();
     if (!isOpen) return () => { cancelled = true; };
 
-    const interval = setInterval(loadProposals, 30000);
+    const interval = setInterval(() => { loadProposals(); loadTrip(); }, 30000);
     return () => { cancelled = true; clearInterval(interval); };
-  }, [trip.id, isSignedIn, isOpen]);
+  }, [trip.id, trip.payload.itinerary, isSignedIn, isOpen, onPayloadRefresh]);
 
   const pendingProposals = proposals.filter((p) => p.status === 'pending');
 
@@ -1534,6 +1657,45 @@ function SavedTripCard({ trip, onUpdate, onDelete, onLeave, isSignedIn, isOpen }
     } catch { /* ignore */ }
     setSubmittingDay(null);
     return false;
+  };
+
+  // Reword a pending suggestion; the AI regenerates the patch in place.
+  const editProposal = async (proposalId: string, prompt: string): Promise<boolean> => {
+    setProposalActionId(proposalId);
+    try {
+      const res = await fetch(`/api/saved-trips/${trip.id}/proposals/${proposalId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.error || 'Failed to regenerate this suggestion.');
+        setProposalActionId(null);
+        return false;
+      }
+      setProposals((prev) => prev.map((p) => (p.id === proposalId ? data.proposal : p)));
+      setProposalActionId(null);
+      return true;
+    } catch {
+      setProposalActionId(null);
+      return false;
+    }
+  };
+
+  const withdrawProposal = async (proposalId: string) => {
+    const snapshot = proposals;
+    setProposals((prev) => prev.filter((p) => p.id !== proposalId));
+    try {
+      const res = await fetch(`/api/saved-trips/${trip.id}/proposals/${proposalId}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        alert(data.error || 'Failed to withdraw this suggestion.');
+        setProposals(snapshot);
+      }
+    } catch {
+      setProposals(snapshot);
+    }
   };
 
   const reviewProposal = async (proposalId: string, action: 'accept' | 'reject') => {
@@ -1720,7 +1882,10 @@ function SavedTripCard({ trip, onUpdate, onDelete, onLeave, isSignedIn, isOpen }
             submittingDay={submittingDay}
             onSubmitProposal={submitProposal}
             onReviewProposal={reviewProposal}
+            onEditProposal={editProposal}
+            onWithdrawProposal={withdrawProposal}
             proposalActionId={proposalActionId}
+            userId={user?.id}
           />
         )}
 
@@ -1896,7 +2061,10 @@ function SavedTripCard({ trip, onUpdate, onDelete, onLeave, isSignedIn, isOpen }
           proposals={pendingProposals}
           actionId={proposalActionId}
           onReview={reviewProposal}
+          onEdit={editProposal}
+          onWithdraw={withdrawProposal}
           onClose={() => setReviewOpen(false)}
+          userId={user?.id}
         />
       )}
     </div>
@@ -1985,6 +2153,12 @@ export default function OneStopPanel({ isOpen, onClose, savedTrips, setSavedTrip
       }).catch(() => { /* silent fail — local state is already updated */ });
     }
   };
+
+  // Pick up an itinerary change accepted by another collaborator without
+  // writing anything back — the server already has the new payload.
+  const refreshTripPayload = useCallback((id: string, payload: ChatPayload) => {
+    setSavedTrips((prev) => prev.map((t) => (t.id === id ? { ...t, payload } : t)));
+  }, [setSavedTrips]);
 
   // Leaving a shared trip only removes the membership row, not the trip itself.
   const leaveTrip = (id: string) => {
@@ -2274,6 +2448,7 @@ export default function OneStopPanel({ isOpen, onClose, savedTrips, setSavedTrip
                   isOpen={isOpen}
                   trip={savedTrips[0]}
                   onUpdate={updateTrip}
+                  onPayloadRefresh={refreshTripPayload}
                   onDelete={() => deleteTrip(savedTrips[0].id)}
                   onLeave={isSignedIn ? () => leaveTrip(savedTrips[0].id) : undefined}
                 />
@@ -2337,6 +2512,7 @@ export default function OneStopPanel({ isOpen, onClose, savedTrips, setSavedTrip
                         isOpen={isOpen}
                         trip={activeTrip}
                         onUpdate={updateTrip}
+                        onPayloadRefresh={refreshTripPayload}
                         onDelete={() => deleteTrip(activeTrip.id)}
                         onLeave={isSignedIn ? () => leaveTrip(activeTrip.id) : undefined}
                       />

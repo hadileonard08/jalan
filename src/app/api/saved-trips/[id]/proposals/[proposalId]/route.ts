@@ -2,15 +2,39 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@clerk/nextjs/server';
 import { db } from '../../../../../../db';
 import { savedTrips, tripProposals } from '../../../../../../db/schema';
-import { mergeItineraryPatch } from '../../../../../../agents/refine-itinerary';
+import { generateItineraryPatch, mergeItineraryPatch } from '../../../../../../agents/refine-itinerary';
 import type { ItineraryPatch } from '../../../../../../lib/chat-state';
 import { getTripAccess, isOwnerLevel } from '../../../../../../lib/trip-access';
+import { serializeSavedTrip } from '../../../../../../lib/serialize-trip';
 import { eq, and } from 'drizzle-orm';
 
 export const dynamic = 'force-dynamic';
 
+function serializeProposal(row: typeof tripProposals.$inferSelect) {
+  return {
+    id: row.id,
+    tripId: row.tripId,
+    proposedByUserId: row.proposedByUserId,
+    status: row.status,
+    suggestedPrompt: row.suggestedPrompt,
+    patchData: row.patchData,
+    createdAt: row.createdAt.toISOString(),
+  };
+}
+
+// Loads the proposal plus the caller's access, enforcing that pending-only
+// actions really are pending.
+async function loadPendingProposal(tripId: string, proposalId: string) {
+  const [proposal] = await db
+    .select()
+    .from(tripProposals)
+    .where(and(eq(tripProposals.id, proposalId), eq(tripProposals.tripId, tripId)))
+    .limit(1);
+  return proposal || null;
+}
+
 // PATCH /api/saved-trips/[id]/proposals/[proposalId]
-// Owner-only endpoint to accept or reject a pending AI-generated itinerary patch.
+// Owner-level endpoint to accept or reject a pending AI-generated itinerary patch.
 export async function PATCH(
   req: NextRequest,
   { params }: { params: { id: string; proposalId: string } }
@@ -38,13 +62,7 @@ export async function PATCH(
       return NextResponse.json({ error: 'Only the Master Planner can review proposals' }, { status: 403 });
     }
 
-    // Load the proposal.
-    const [proposal] = await db
-      .select()
-      .from(tripProposals)
-      .where(and(eq(tripProposals.id, proposalId), eq(tripProposals.tripId, tripId)))
-      .limit(1);
-
+    const proposal = await loadPendingProposal(tripId, proposalId);
     if (!proposal) {
       return NextResponse.json({ error: 'Proposal not found' }, { status: 404 });
     }
@@ -59,17 +77,7 @@ export async function PATCH(
         .set({ status: 'rejected' })
         .where(eq(tripProposals.id, proposalId))
         .returning();
-      return NextResponse.json({
-        proposal: {
-          id: updated.id,
-          tripId: updated.tripId,
-          proposedByUserId: updated.proposedByUserId,
-          status: updated.status,
-          suggestedPrompt: updated.suggestedPrompt,
-          patchData: updated.patchData,
-          createdAt: updated.createdAt.toISOString(),
-        },
-      });
+      return NextResponse.json({ proposal: serializeProposal(updated) });
     }
 
     // Accept: merge patch into the saved itinerary.
@@ -105,37 +113,121 @@ export async function PATCH(
       .returning();
 
     return NextResponse.json({
-      trip: {
-        id: updatedTrip.id,
-        conversationId: updatedTrip.conversationId || '',
-        destination: updatedTrip.destination,
-        dates: updatedTrip.dates || 'Dates TBD',
-        weatherAlert: updatedTrip.weatherAlert,
-        weatherSnapshot: updatedTrip.weatherSnapshot ? JSON.parse(updatedTrip.weatherSnapshot) : null,
-        weatherUpdatedAt: updatedTrip.weatherUpdatedAt ? updatedTrip.weatherUpdatedAt.toISOString() : null,
-        payload: JSON.parse(updatedTrip.payload),
-        todos: JSON.parse(updatedTrip.todos),
-        notes: updatedTrip.notes,
-        noteEntries: JSON.parse(updatedTrip.noteEntries || '[]'),
-        feedback: JSON.parse(updatedTrip.feedback || '{}'),
-        dayFeedback: JSON.parse(updatedTrip.dayFeedback || '{}'),
-        flightInfo: JSON.parse(updatedTrip.flightInfo || '[]'),
-        documents: JSON.parse(updatedTrip.documents || '[]'),
-        savedAt: updatedTrip.createdAt.toISOString(),
-      },
-      proposal: {
-        id: updatedProposal.id,
-        tripId: updatedProposal.tripId,
-        proposedByUserId: updatedProposal.proposedByUserId,
-        status: updatedProposal.status,
-        suggestedPrompt: updatedProposal.suggestedPrompt,
-        patchData: updatedProposal.patchData,
-        createdAt: updatedProposal.createdAt.toISOString(),
-      },
+      trip: serializeSavedTrip(updatedTrip),
+      proposal: serializeProposal(updatedProposal),
     });
   } catch (error) {
     console.error('Proposal review error:', error);
     const message = error instanceof Error ? error.message : 'Failed to review proposal';
     return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
+// PUT /api/saved-trips/[id]/proposals/[proposalId]
+// The suggester can reword their own pending suggestion; the AI regenerates
+// the patch in place. Body: { prompt, dayIndex? }
+export async function PUT(
+  req: NextRequest,
+  { params }: { params: { id: string; proposalId: string } }
+) {
+  try {
+    const userId = auth().userId;
+    if (!userId) {
+      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+    }
+
+    const { id: tripId, proposalId } = params;
+    const body = await req.json().catch(() => ({}));
+    const { prompt, dayIndex } = body;
+    if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
+      return NextResponse.json({ error: 'prompt is required' }, { status: 400 });
+    }
+
+    const { trip, role } = await getTripAccess(tripId, userId);
+    if (!trip) {
+      return NextResponse.json({ error: 'Trip not found' }, { status: 404 });
+    }
+    if (!role) {
+      return NextResponse.json({ error: 'Not authorized' }, { status: 403 });
+    }
+
+    const proposal = await loadPendingProposal(tripId, proposalId);
+    if (!proposal) {
+      return NextResponse.json({ error: 'Proposal not found' }, { status: 404 });
+    }
+    if (proposal.proposedByUserId !== userId) {
+      return NextResponse.json({ error: 'Only the suggester can edit this suggestion' }, { status: 403 });
+    }
+    if (proposal.status !== 'pending') {
+      return NextResponse.json({ error: `Proposal already ${proposal.status}` }, { status: 409 });
+    }
+
+    const payload = JSON.parse(trip.payload || '{}');
+    const existingItinerary = payload.itinerary || '';
+    if (!existingItinerary) {
+      return NextResponse.json({ error: 'Trip has no itinerary to refine' }, { status: 400 });
+    }
+
+    const day = Number.isInteger(dayIndex) && dayIndex > 0 ? (dayIndex as number) : null;
+    const patch = await generateItineraryPatch(
+      existingItinerary,
+      trip.destination || 'the destination',
+      day ? `Day ${day}: ${prompt.trim()}` : prompt.trim(),
+    );
+
+    const [updated] = await db
+      .update(tripProposals)
+      .set({ suggestedPrompt: prompt.trim(), patchData: patch })
+      .where(eq(tripProposals.id, proposalId))
+      .returning();
+
+    return NextResponse.json({ proposal: serializeProposal(updated) });
+  } catch (error) {
+    console.error('Proposal update error:', error);
+    const message = error instanceof Error ? error.message : 'Failed to update proposal';
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
+// DELETE /api/saved-trips/[id]/proposals/[proposalId]
+// The suggester can withdraw their own pending suggestion; owner level can
+// withdraw any pending one. Reviewed suggestions are kept for the record.
+export async function DELETE(
+  _req: NextRequest,
+  { params }: { params: { id: string; proposalId: string } }
+) {
+  try {
+    const userId = auth().userId;
+    if (!userId) {
+      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+    }
+
+    const { id: tripId, proposalId } = params;
+
+    const { trip, role } = await getTripAccess(tripId, userId);
+    if (!trip) {
+      return NextResponse.json({ error: 'Trip not found' }, { status: 404 });
+    }
+    if (!role) {
+      return NextResponse.json({ error: 'Not authorized' }, { status: 403 });
+    }
+
+    const proposal = await loadPendingProposal(tripId, proposalId);
+    if (!proposal) {
+      return NextResponse.json({ error: 'Proposal not found' }, { status: 404 });
+    }
+    if (proposal.proposedByUserId !== userId && !isOwnerLevel(role)) {
+      return NextResponse.json({ error: 'Only the suggester can withdraw this suggestion' }, { status: 403 });
+    }
+    if (proposal.status !== 'pending') {
+      return NextResponse.json({ error: `Proposal already ${proposal.status}` }, { status: 409 });
+    }
+
+    await db.delete(tripProposals).where(eq(tripProposals.id, proposalId));
+
+    return NextResponse.json({ success: true, withdrawnId: proposalId });
+  } catch (error) {
+    console.error('Proposal delete error:', error);
+    return NextResponse.json({ error: 'Failed to withdraw proposal' }, { status: 500 });
   }
 }

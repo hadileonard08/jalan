@@ -3,9 +3,34 @@ import { auth } from '@clerk/nextjs/server';
 import { db } from '../../../../db';
 import { savedTrips } from '../../../../db/schema';
 import { getTripAccess, isOwnerLevel } from '../../../../lib/trip-access';
+import { serializeSavedTrip } from '../../../../lib/serialize-trip';
 import { eq, and } from 'drizzle-orm';
 
 export const dynamic = 'force-dynamic';
+
+// GET /api/saved-trips/[id] — fetch a single trip the user can access.
+// Used by One Stop to pick up itinerary changes accepted elsewhere.
+export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+  try {
+    const userId = auth().userId;
+    if (!userId) {
+      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+    }
+
+    const { trip, role } = await getTripAccess(params.id, userId);
+    if (!trip) {
+      return NextResponse.json({ error: 'Trip not found' }, { status: 404 });
+    }
+    if (!role) {
+      return NextResponse.json({ error: 'Not authorized' }, { status: 403 });
+    }
+
+    return NextResponse.json({ trip: serializeSavedTrip(trip), role });
+  } catch (error) {
+    console.error('Saved trip GET error:', error);
+    return NextResponse.json({ error: 'Failed to load trip' }, { status: 500 });
+  }
+}
 
 // PATCH /api/saved-trips/[id] — update a saved trip.
 // Body: { todos?, notes?, feedback?, dayFeedback?, flightInfo?, documents? }

@@ -687,9 +687,10 @@ export default function ChatPage() {
     }
   }, [savedTrips, isLoaded, isSignedIn]);
 
-  // Refresh cron-generated weather data whenever One Stop opens so it appears
-  // without a page reload. Only the weather fields are merged in, so unsynced
-  // local edits (todos, notes, feedback) are never clobbered.
+  // Refresh server-owned trip data whenever One Stop opens so cron weather and
+  // itinerary changes accepted by another collaborator appear without a page
+  // reload. Only weather fields and the payload (itinerary, maps, packing) are
+  // merged, so unsynced local edits (todos, notes, feedback) are never clobbered.
   useEffect(() => {
     if (!isLoaded || !isSignedIn || !oneStopOpen) return;
     let cancelled = false;
@@ -705,10 +706,11 @@ export default function ChatPage() {
             weatherAlert: fresh.weatherAlert,
             weatherSnapshot: fresh.weatherSnapshot,
             weatherUpdatedAt: fresh.weatherUpdatedAt,
+            payload: fresh.payload,
           };
         }));
       })
-      .catch(() => { /* keep the weather data we already have */ });
+      .catch(() => { /* keep the data we already have */ });
     return () => { cancelled = true; };
   }, [isLoaded, isSignedIn, oneStopOpen]);
 
