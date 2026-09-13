@@ -7,12 +7,12 @@ import {
   MapPin, Calendar, Map, Bell, ThumbsUp, ThumbsDown, MessageSquare,
   FileText, Upload, Download, Hotel, Train, Car, ChevronDown, ChevronUp,
   AlertTriangle, Sparkles, UserCog, UserPlus, Link2, Check, LogOut,
-  List, Sun, Briefcase, Crown,
+  List, Sun, Briefcase, Crown, Navigation,
 } from 'lucide-react';
 import { useUser } from '@/components/AuthProvider';
 import type {
   SavedTrip, ChatPayload, StopFeedback, StopComment, DayFeedback, DayComment,
-  ManualFlightEntry, UploadedDocument, WeatherSnapshot, TripProposal, NoteEntry,
+  ManualFlightEntry, UploadedDocument, WeatherSnapshot, TripProposal, NoteEntry, RouteLink,
 } from '@/lib/chat-state';
 import { stripFollowUpQuestions } from '@/lib/itinerary-cleanup';
 import type { DayTransport } from '@/agents/transport';
@@ -1706,10 +1706,52 @@ const TRIP_TABS: { key: TripTab; label: string; icon: typeof Plane }[] = [
   { key: 'notes', label: 'Notes', icon: StickyNote },
 ];
 
-function SavedTripCard({ trip, onUpdate, onDelete, onLeave, onPayloadRefresh, isSignedIn, isOpen }: { trip: SavedTrip; onUpdate: (trip: SavedTrip) => void; onDelete?: () => void; onLeave?: () => void; onPayloadRefresh: (tripId: string, payload: ChatPayload) => void; isSignedIn: boolean; isOpen: boolean }) {
+// Rendered above the scroll area so the tabs stay put — inside the scrolling card
+// they pinned to the scrollport and content slid underneath them.
+function TripTabBar({
+  activeTab,
+  onChange,
+}: {
+  activeTab: TripTab;
+  onChange: (tab: TripTab) => void;
+}) {
+  const barRef = useRef<HTMLDivElement>(null);
+
+  // Keep the selected tab in view when the bar is wider than the screen.
+  useEffect(() => {
+    const active = barRef.current?.querySelector('[data-tab-active="true"]') as HTMLElement | null;
+    active?.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+  }, [activeTab]);
+
+  return (
+    <div
+      ref={barRef}
+      role="tablist"
+      className="flex overflow-x-auto scrollbar-hide"
+    >
+      {TRIP_TABS.map(({ key, label, icon: Icon }) => (
+        <button
+          key={key}
+          role="tab"
+          onClick={() => onChange(key)}
+          data-tab-active={activeTab === key}
+          aria-selected={activeTab === key}
+          className={`flex-shrink-0 px-3 md:px-4 py-2 md:flex-1 text-[13px] font-medium whitespace-nowrap min-h-[48px] flex items-center justify-center gap-1.5 ${
+            activeTab === key
+              ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-600 bg-blue-50 dark:bg-blue-900/20'
+              : 'text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/50'
+          }`}
+        >
+          <Icon size={15} className="flex-shrink-0" />
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function SavedTripCard({ trip, onUpdate, onDelete, onLeave, onPayloadRefresh, isSignedIn, isOpen, activeTab }: { trip: SavedTrip; onUpdate: (trip: SavedTrip) => void; onDelete?: () => void; onLeave?: () => void; onPayloadRefresh: (tripId: string, payload: ChatPayload) => void; isSignedIn: boolean; isOpen: boolean; activeTab: TripTab }) {
   const { user } = useUser();
-  const [activeTab, setActiveTab] = useState<TripTab>('itinerary');
-  const tabBarRef = useRef<HTMLDivElement>(null);
   const [todoText, setTodoText] = useState('');
   const [noteText, setNoteText] = useState('');
   const [proposals, setProposals] = useState<TripProposal[]>([]);
@@ -1752,12 +1794,6 @@ function SavedTripCard({ trip, onUpdate, onDelete, onLeave, onPayloadRefresh, is
   }, [isSignedIn, isOpen, syncFromServer]);
 
   const pendingProposals = proposals.filter((p) => p.status === 'pending');
-
-  // Keep the selected tab in view when the tab bar is wider than the screen.
-  useEffect(() => {
-    const active = tabBarRef.current?.querySelector('[data-tab-active="true"]') as HTMLElement | null;
-    active?.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
-  }, [activeTab]);
 
   // day is passed so the AI targets that day; the stored prompt stays as typed.
   const submitProposal = async (day: number, prompt: string): Promise<boolean> => {
@@ -1992,26 +2028,6 @@ function SavedTripCard({ trip, onUpdate, onDelete, onLeave, onPayloadRefresh, is
         </div>
       </div>
 
-      <div
-        ref={tabBarRef}
-        className="sticky top-0 z-10 flex overflow-x-auto scrollbar-hide border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-[#2c2c2e] -mx-4 px-4 md:mx-0 md:px-0"
-      >
-        {TRIP_TABS.map(({ key, label, icon: Icon }) => (
-          <button
-            key={key}
-            onClick={() => setActiveTab(key)}
-            data-tab-active={activeTab === key}
-            aria-current={activeTab === key}
-            className={`flex-shrink-0 px-3 md:px-4 py-2 md:py-2 md:flex-1 text-[13px] font-medium whitespace-nowrap min-h-[48px] flex items-center justify-center gap-1.5 ${
-              activeTab === key ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-600 bg-blue-50 dark:bg-blue-900/20' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/50'
-            }`}
-          >
-            <Icon size={15} className="flex-shrink-0" />
-            {label}
-          </button>
-        ))}
-      </div>
-
       <div className="p-3 md:p-4">
         {activeTab === 'itinerary' && (
           <ItineraryTab
@@ -2036,7 +2052,7 @@ function SavedTripCard({ trip, onUpdate, onDelete, onLeave, onPayloadRefresh, is
         {activeTab === 'routes' && (
           <div className="space-y-3">
             {payload.transportPlan?.days && payload.transportPlan.days.length > 0 && (
-              <OneStopRouteMap days={payload.transportPlan.days} />
+              <OneStopRouteMap days={payload.transportPlan.days} routeLinks={payload.routeLinks} />
             )}
             {payload.routeLinks && payload.routeLinks.length > 0 ? (
               payload.routeLinks.map((link, i) => (
@@ -2239,26 +2255,42 @@ function buildTripSummary(trip: SavedTrip): string {
   return summary;
 }
 
-function OneStopRouteMap({ days }: { days: DayTransport[] }) {
+function OneStopRouteMap({ days, routeLinks }: { days: DayTransport[]; routeLinks?: RouteLink[] }) {
   const [activeDay, setActiveDay] = useState(days[0]?.day || '1');
   const activeDayData = days.find((d) => d.day === activeDay) || days[0];
+  // The Google Maps link for whichever day is selected — put it next to the
+  // day chips so it's visible without scrolling past the map.
+  const activeLink = routeLinks?.find((link) => link.day === activeDay);
   if (!activeDayData) return null;
   return (
     <div className="border border-black/[0.05] dark:border-white/[0.1] rounded-2xl p-3">
-      <div className="flex gap-2 mb-3 overflow-x-auto pb-1 scrollbar-hide">
-        {days.map((d) => (
-          <button
-            key={d.day}
-            onClick={() => setActiveDay(d.day)}
-            className={`flex-shrink-0 px-3 py-1.5 rounded-full text-sm font-medium border transition-colors ${
-              activeDay === d.day
-                ? 'bg-blue-600 text-white border-blue-600'
-                : 'bg-white dark:bg-[#2c2c2e] text-gray-700 dark:text-gray-200 border-black/[0.05] dark:border-white/[0.1] hover:border-blue-500/40'
-            }`}
+      <div className="flex items-start justify-between gap-2 mb-3">
+        <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
+          {days.map((d) => (
+            <button
+              key={d.day}
+              onClick={() => setActiveDay(d.day)}
+              className={`flex-shrink-0 px-3 py-1.5 rounded-full text-sm font-medium border transition-colors ${
+                activeDay === d.day
+                  ? 'bg-blue-600 text-white border-blue-600'
+                  : 'bg-white dark:bg-[#2c2c2e] text-gray-700 dark:text-gray-200 border-black/[0.05] dark:border-white/[0.1] hover:border-blue-500/40'
+              }`}
+            >
+              Day {d.day}
+            </button>
+          ))}
+        </div>
+        {activeLink && (
+          <a
+            href={activeLink.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex-shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[13px] font-medium bg-blue-50 dark:bg-blue-900/25 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800/50 hover:bg-blue-100 dark:hover:bg-blue-900/40 no-underline whitespace-nowrap"
+            title={activeLink.highlights || 'Open this day in Google Maps'}
           >
-            Day {d.day}
-          </button>
-        ))}
+            <Navigation size={13} /> Google Maps
+          </a>
+        )}
       </div>
       <DailyRouteMap waypoints={activeDayData.waypoints} polyline={activeDayData.polyline} />
     </div>
@@ -2267,6 +2299,8 @@ function OneStopRouteMap({ days }: { days: DayTransport[] }) {
 
 export default function OneStopPanel({ isOpen, onClose, savedTrips, setSavedTrips, isSignedIn }: OneStopPanelProps) {
   const [activeTripId, setActiveTripId] = useState<string | null>(null);
+  // The selected tab lives here so the tab bar can sit above the scroll area.
+  const [activeTab, setActiveTab] = useState<TripTab>('itinerary');
   const [view, setView] = useState<'trips' | 'alerts'>('trips');
   const [alerts, setAlerts] = useState<any[]>([]);
   const [alertForm, setAlertForm] = useState({ origin: '', destination: '', cabin: '', month: '', minCPP: '1.5' });
@@ -2592,17 +2626,26 @@ export default function OneStopPanel({ isOpen, onClose, savedTrips, setSavedTrip
             </div>
           ) : savedTrips.length === 1 ? (
             /* --- Trips View (single trip) --- */
-            <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8">
-              <div className="mx-auto max-w-6xl">
-                <SavedTripCard
-                  isSignedIn={isSignedIn}
-                  isOpen={isOpen}
-                  trip={savedTrips[0]}
-                  onUpdate={updateTrip}
-                  onPayloadRefresh={refreshTripPayload}
-                  onDelete={() => deleteTrip(savedTrips[0].id)}
-                  onLeave={isSignedIn ? () => leaveTrip(savedTrips[0].id) : undefined}
-                />
+            <div className="flex-1 flex flex-col overflow-hidden">
+              {/* Pinned above the scroll area, so it never drifts into the content */}
+              <div className="flex-shrink-0 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-[#2c2c2e] px-4 md:px-6 lg:px-8">
+                <div className="mx-auto max-w-6xl">
+                  <TripTabBar activeTab={activeTab} onChange={setActiveTab} />
+                </div>
+              </div>
+              <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8">
+                <div className="mx-auto max-w-6xl">
+                  <SavedTripCard
+                    isSignedIn={isSignedIn}
+                    isOpen={isOpen}
+                    activeTab={activeTab}
+                    trip={savedTrips[0]}
+                    onUpdate={updateTrip}
+                    onPayloadRefresh={refreshTripPayload}
+                    onDelete={() => deleteTrip(savedTrips[0].id)}
+                    onLeave={isSignedIn ? () => leaveTrip(savedTrips[0].id) : undefined}
+                  />
+                </div>
               </div>
             </div>
           ) : (
@@ -2668,22 +2711,32 @@ export default function OneStopPanel({ isOpen, onClose, savedTrips, setSavedTrip
                   </div>
                 </div>
 
-                {/* Active trip detail */}
-                <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8">
-                  <div className="mx-auto max-w-6xl">
-                    {activeTrip ? (
-                      <SavedTripCard
-                        isSignedIn={isSignedIn}
-                        isOpen={isOpen}
-                        trip={activeTrip}
-                        onUpdate={updateTrip}
-                        onPayloadRefresh={refreshTripPayload}
-                        onDelete={() => deleteTrip(activeTrip.id)}
-                        onLeave={isSignedIn ? () => leaveTrip(activeTrip.id) : undefined}
-                      />
-                    ) : (
-                      <div className="text-center text-gray-400 dark:text-gray-500 py-16">Select a trip.</div>
-                    )}
+                {/* Active trip detail — the tab bar is pinned above the scroller */}
+                <div className="flex-1 flex flex-col overflow-hidden">
+                  {activeTrip && (
+                    <div className="flex-shrink-0 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-[#2c2c2e] px-4 md:px-6 lg:px-8">
+                      <div className="mx-auto max-w-6xl">
+                        <TripTabBar activeTab={activeTab} onChange={setActiveTab} />
+                      </div>
+                    </div>
+                  )}
+                  <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8">
+                    <div className="mx-auto max-w-6xl">
+                      {activeTrip ? (
+                        <SavedTripCard
+                          isSignedIn={isSignedIn}
+                          isOpen={isOpen}
+                          activeTab={activeTab}
+                          trip={activeTrip}
+                          onUpdate={updateTrip}
+                          onPayloadRefresh={refreshTripPayload}
+                          onDelete={() => deleteTrip(activeTrip.id)}
+                          onLeave={isSignedIn ? () => leaveTrip(activeTrip.id) : undefined}
+                        />
+                      ) : (
+                        <div className="text-center text-gray-400 dark:text-gray-500 py-16">Select a trip.</div>
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>
