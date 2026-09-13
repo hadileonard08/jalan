@@ -486,6 +486,7 @@ A sign-in-gated full-page view accessible from the left sidebar that lets users:
 - **Approval merges deterministically** — accepting runs the same `mergeItineraryPatch()` reducer the refine flow uses, so only the targeted day changes. A patch that no longer matches anything returns 422 instead of silently marking itself accepted.
 - **Approval refreshes what described the old stop** — the day's hero image, its Google Maps link, its map waypoints/polyline, and the transport notes in the text are rebuilt for the edited days only, so an approved change can't leave a stale photo or route behind. Best-effort: a failing refresh never fails the approval.
 - **Suggestion lifecycle** — the suggester can reword and regenerate a pending suggestion in place, or withdraw it. Reviewed suggestions are kept as the decision record.
+- **Safe when two people act at once** — a suggestion is claimed with an atomic `pending → accepted` transition, so it can only be applied once, and the itinerary write is a compare-and-swap on a version counter, so a reviewer whose copy went stale is refused (409) instead of silently overwriting the other's change.
 - **Live propagation** — accepted changes reach other collaborators' open panels within ~30 seconds, and instantly when they reopen One Stop.
 
 ### Mobile-optimized
@@ -577,6 +578,7 @@ src/
     clerk-users.ts           # Resolves member IDs to names/avatars via the Clerk Backend API (cached)
     itinerary-cleanup.ts     # Strips trailing AI follow-up questions from saved itineraries
     refresh-enrichment.ts    # Rebuilds a day's hero image, route links, map waypoints and transport notes after an approved edit
+    proposal-review.ts       # Concurrency guards: atomic proposal claim + compare-and-swap on the itinerary payload
     ai-provider.ts           # LLM model configuration (hybrid: speed + quality models)
     ragEvaluator.ts          # Typed RAG Triad LLM-as-a-judge evaluation
     airports.ts              # Airport code/name mappings (70+ global destinations)
@@ -622,6 +624,7 @@ scripts/
   test-interrupt-loop.ts     # interrupt()/resume mechanics: suspension, resume, pre-interrupt node does not re-run
   test-date-window.ts        # Seasonal windows ("spring 2027"), when the date fallback may invent a date, and the deterministic itinerary-vs-requested date check
   test-refresh-enrichment.ts # Post-approval refresh: affected days, note de-duplication, stale hero-image detection
+  test-review-concurrency.ts # Concurrent review guards, with real parallel calls against Postgres
   backfill-enrichment.ts     # Repairs trips edited before the refresh existed (--dry-run supported)
   test-readme-diagram.cjs    # Renders the README Mermaid diagram in a browser to catch syntax errors
   setup-checkpointer.ts      # One-time creation of the LangGraph checkpoint tables

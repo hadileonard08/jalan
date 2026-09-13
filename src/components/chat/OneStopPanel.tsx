@@ -1695,43 +1695,37 @@ function SavedTripCard({ trip, onUpdate, onDelete, onLeave, onPayloadRefresh, is
   const [sharingOpen, setSharingOpen] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
 
+  // Pull the latest suggestions and itinerary. Used by the 30s poll below and
+  // after a 409, when another reviewer changed the trip under us.
+  const syncFromServer = useCallback(async () => {
+    try {
+      const proposalsRes = await fetch(`/api/saved-trips/${trip.id}/proposals`);
+      const data = await proposalsRes.json();
+      if (data.role) setProposalRole(data.role);
+      if (Array.isArray(data.proposals)) setProposals(data.proposals);
+    } catch { /* keep what we have */ }
+
+    try {
+      const tripRes = await fetch(`/api/saved-trips/${trip.id}`);
+      const data = await tripRes.json();
+      const fresh = data.trip?.payload?.itinerary;
+      if (typeof fresh === 'string' && fresh !== trip.payload.itinerary) {
+        onPayloadRefresh(trip.id, data.trip.payload);
+      }
+    } catch { /* keep what we have */ }
+  }, [trip.id, trip.payload.itinerary, onPayloadRefresh]);
+
   // Load collaboration role and pending proposals for this trip, and keep
   // refreshing while One Stop is open so new suggestions — and itinerary
   // changes accepted by another collaborator — show up without a reload.
   useEffect(() => {
     if (!isSignedIn) return;
-    let cancelled = false;
+    syncFromServer();
+    if (!isOpen) return;
 
-    const loadProposals = () => {
-      fetch(`/api/saved-trips/${trip.id}/proposals`)
-        .then((r) => r.json())
-        .then((data) => {
-          if (cancelled) return;
-          if (data.role) setProposalRole(data.role);
-          if (Array.isArray(data.proposals)) setProposals(data.proposals);
-        })
-        .catch(() => {});
-    };
-
-    const loadTrip = () => {
-      fetch(`/api/saved-trips/${trip.id}`)
-        .then((r) => r.json())
-        .then((data) => {
-          if (cancelled) return;
-          const fresh = data.trip?.payload?.itinerary;
-          if (typeof fresh === 'string' && fresh !== trip.payload.itinerary) {
-            onPayloadRefresh(trip.id, data.trip.payload);
-          }
-        })
-        .catch(() => {});
-    };
-
-    loadProposals();
-    if (!isOpen) return () => { cancelled = true; };
-
-    const interval = setInterval(() => { loadProposals(); loadTrip(); }, 30000);
-    return () => { cancelled = true; clearInterval(interval); };
-  }, [trip.id, trip.payload.itinerary, isSignedIn, isOpen, onPayloadRefresh]);
+    const interval = setInterval(syncFromServer, 30000);
+    return () => clearInterval(interval);
+  }, [isSignedIn, isOpen, syncFromServer]);
 
   const pendingProposals = proposals.filter((p) => p.status === 'pending');
 
@@ -1812,6 +1806,9 @@ function SavedTripCard({ trip, onUpdate, onDelete, onLeave, onPayloadRefresh, is
       const data = await res.json();
       if (!res.ok) {
         alert(data.error || 'Failed to review this suggestion.');
+        // 409 means another reviewer acted first, or the trip moved on while we
+        // were applying it — pull the current state instead of showing stale UI.
+        if (res.status === 409) await syncFromServer();
         setProposalActionId(null);
         return;
       }

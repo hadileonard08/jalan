@@ -108,6 +108,9 @@ export const savedTrips = pgTable('saved_trips', {
   dayFeedback: text('day_feedback').notNull().default('{}'), // JSON: Record<dayIndex, DayFeedback>
   flightInfo: text('flight_info').notNull().default('[]'), // JSON: ManualFlightEntry[]
   documents: text('documents').notNull().default('[]'), // JSON: UploadedDocument[]
+  // Bumped on every payload write, so a reviewer accepting a proposal can
+  // compare-and-swap and avoid losing a concurrent change.
+  version: integer('version').notNull().default(0),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (table) => ({

@@ -7,6 +7,7 @@ import type { ItineraryPatch } from '../../../../../../lib/chat-state';
 import { getTripAccess, isOwnerLevel } from '../../../../../../lib/trip-access';
 import { serializeSavedTrip } from '../../../../../../lib/serialize-trip';
 import { refreshEnrichment, affectedDaysFromPatch } from '../../../../../../lib/refresh-enrichment';
+import { claimProposal, releaseProposal, commitPayload } from '../../../../../../lib/proposal-review';
 import { eq, and } from 'drizzle-orm';
 
 export const dynamic = 'force-dynamic';
@@ -73,12 +74,15 @@ export async function PATCH(
     }
 
     if (action === 'reject') {
-      const [updated] = await db
-        .update(tripProposals)
-        .set({ status: 'rejected' })
-        .where(eq(tripProposals.id, proposalId))
-        .returning();
-      return NextResponse.json({ proposal: serializeProposal(updated) });
+      // Atomic claim: if another reviewer already decided, this matches no row.
+      const rejected = await claimProposal(tripId, proposalId, 'rejected');
+      if (!rejected) {
+        return NextResponse.json(
+          { error: 'Another reviewer already handled this suggestion.' },
+          { status: 409 },
+        );
+      }
+      return NextResponse.json({ proposal: serializeProposal(rejected) });
     }
 
     // Accept: merge patch into the saved itinerary.
@@ -99,6 +103,17 @@ export async function PATCH(
       );
     }
 
+    // Claim the suggestion BEFORE the expensive work, so two concurrent accepts
+    // cannot both run enrichment for the same patch. The status transition is
+    // the lock — only one caller can move it out of `pending`.
+    const claimed = await claimProposal(tripId, proposalId, 'accepted');
+    if (!claimed) {
+      return NextResponse.json(
+        { error: 'Another reviewer already handled this suggestion.' },
+        { status: 409 },
+      );
+    }
+
     // An approved edit changes the *stops*, so the parts of the trip that
     // describe them must be rebuilt: the day's hero image, its route link, its
     // map waypoints, and the transport notes inside the text. Best-effort — the
@@ -116,21 +131,21 @@ export async function PATCH(
       console.warn('[Proposal] enrichment refresh failed, keeping the patched text:', error);
     }
 
-    const [updatedTrip] = await db
-      .update(savedTrips)
-      .set({ payload: JSON.stringify(newPayload), updatedAt: new Date() })
-      .where(eq(savedTrips.id, tripId))
-      .returning();
-
-    const [updatedProposal] = await db
-      .update(tripProposals)
-      .set({ status: 'accepted' })
-      .where(eq(tripProposals.id, proposalId))
-      .returning();
+    // Compare-and-swap: if another reviewer committed while this request was
+    // enriching, our `payload` copy is stale. Writing it anyway would silently
+    // drop their change, so hand the suggestion back and ask for a retry.
+    const updatedTrip = await commitPayload(tripId, trip.version, newPayload);
+    if (!updatedTrip) {
+      await releaseProposal(proposalId);
+      return NextResponse.json(
+        { error: 'The trip changed while this suggestion was being applied. Please review it again.' },
+        { status: 409 },
+      );
+    }
 
     return NextResponse.json({
       trip: serializeSavedTrip(updatedTrip),
-      proposal: serializeProposal(updatedProposal),
+      proposal: serializeProposal(claimed),
     });
   } catch (error) {
     console.error('Proposal review error:', error);
