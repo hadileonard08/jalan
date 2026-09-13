@@ -129,6 +129,12 @@ You will be given three inputs:
 2. RETRIEVED CONTEXT — the data the system gathered from external sources (weather, news, flight deals, images).
 3. DRAFTED ITINERARY — the final itinerary presented to the user.
 
+Base every statement on the three inputs above. Quote dates and values exactly as
+they appear. Do NOT estimate or compute magnitudes — never write things like "off
+by 1.5 years", "three days too long", or "20% cheaper". If a number is not stated
+in the inputs, describe the mismatch qualitatively ("the draft is dated in a
+different season than requested") and let the score carry the severity.
+
 Grade the itinerary on the RAG Triad using a 1-5 scale for each metric:
 
 ### 1. Context Relevance (1-5)
@@ -194,9 +200,15 @@ export async function evaluateRag(
   userQuery: string,
   retrievedContext: string,
   draftItinerary: string,
+  requested?: {
+    destination?: string;
+    startDate?: string;
+    endDate?: string;
+    interests?: string;
+  },
 ): Promise<RagEvaluation | null> {
   return evaluateRagQuality({
-    userIntent: { message: userQuery },
+    userIntent: { message: userQuery, ...requested },
     retrievedContext: {
       weather: null,
       news: null,

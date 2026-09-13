@@ -502,6 +502,65 @@ export function getExpectedTripDays(
   return durationDays && durationDays > 0 ? durationDays : undefined;
 }
 
+const MONTH_NAMES = [
+  'january', 'february', 'march', 'april', 'may', 'june',
+  'july', 'august', 'september', 'october', 'november', 'december',
+];
+
+// Months a trip spans, as "YYYY-MM" keys.
+function tripMonthKeys(startDate?: string, endDate?: string): Set<string> {
+  const keys = new Set<string>();
+  if (!startDate) return keys;
+  const start = new Date(`${startDate}T00:00:00Z`);
+  if (Number.isNaN(start.getTime())) return keys;
+  const end = new Date(`${endDate || startDate}T00:00:00Z`);
+
+  const cursor = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), 1));
+  const last = Number.isNaN(end.getTime())
+    ? cursor
+    : new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), 1));
+  while (cursor <= last) {
+    keys.add(`${cursor.getUTCFullYear()}-${String(cursor.getUTCMonth() + 1).padStart(2, '0')}`);
+    cursor.setUTCMonth(cursor.getUTCMonth() + 1);
+  }
+  return keys;
+}
+
+// Compares the dates printed in the itinerary's day headings against the dates the
+// user actually asked for. Deterministic on purpose: an LLM judge estimating how
+// far off a draft is gets the magnitude wrong (it once called a 4-month gap
+// "1.5 years"), so the machine states the two ranges and nothing more.
+export function findItineraryDateMismatch(
+  itinerary: string,
+  startDate?: string,
+  endDate?: string,
+): string | null {
+  const allowed = tripMonthKeys(startDate, endDate);
+  if (allowed.size === 0 || !itinerary) return null;
+
+  // Only day headings — prose mentions ("the 2027 sakura season") are not dates.
+  const headings = Array.from(itinerary.matchAll(/#{1,4}\s+Day\s+\d+[^\n]*/gi)).map((m) => m[0]);
+  const offenders: string[] = [];
+
+  const datePattern =
+    /\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2}(?:,?\s+(20\d{2}))?\b/gi;
+
+  for (const heading of headings) {
+    for (const match of heading.matchAll(datePattern)) {
+      const monthKey = String(MONTH_NAMES.indexOf(match[1].toLowerCase()) + 1).padStart(2, '0');
+      const year = match[2];
+      const ok = Array.from(allowed).some(
+        (key) => key.endsWith(`-${monthKey}`) && (!year || key.startsWith(year)),
+      );
+      if (!ok) offenders.push(match[0].trim());
+    }
+  }
+
+  if (offenders.length === 0) return null;
+  const requested = endDate && endDate !== startDate ? `${startDate} to ${endDate}` : startDate;
+  return `The itinerary's day headings are dated ${Array.from(new Set(offenders)).slice(0, 3).join(', ')}, but the user requested ${requested}. Regenerate every day for the requested dates.`;
+}
+
 export function findPastCalendarDates(text: string, referenceDate = new Date()): string[] {
   const candidates = new Set<string>();
   for (const match of text.matchAll(/\b\d{4}-\d{2}-\d{2}\b/g)) candidates.add(match[0]);
@@ -1169,6 +1228,16 @@ async function guardrailsNode(state: typeof ConversationStateAnnotation.State) {
     feedback.push(`The itinerary contains past calendar dates: ${pastDates.join(', ')}. Remove past events and regenerate the plan using only current or future travel dates and events.`);
   }
 
+  // Check 4: the itinerary is actually for the dates the user asked for. This is
+  // the deterministic counterpart to the Critic's relevance score — it reports
+  // the mismatch with exact dates instead of an estimated magnitude.
+  const dateMismatch = findItineraryDateMismatch(
+    state.itinerary,
+    state.entities.startDate,
+    state.entities.endDate,
+  );
+  if (dateMismatch) feedback.push(dateMismatch);
+
   // Check 3: Verify each day has Morning/Afternoon/Evening time blocks.
   // Only flag if the day has NONE of the three time slots — individual missing
   // slots are a formatting preference, not a safety issue.
@@ -1197,7 +1266,14 @@ async function criticNode(state: typeof ConversationStateAnnotation.State) {
   const guardrailsFeedback = state.criticFeedback;
 
   try {
-    const evaluation = await evaluateRag(userQuery, retrievedContext, draftItinerary);
+    // Pass the requested dates through: without them the judge has to infer the
+    // trip window from prose and gets the magnitude of a mismatch wrong.
+    const evaluation = await evaluateRag(userQuery, retrievedContext, draftItinerary, {
+      destination: state.entities.destination,
+      startDate: state.entities.startDate,
+      endDate: state.entities.endDate,
+      interests: state.entities.interests,
+    });
     if (!evaluation) {
       return {
         isApproved: false,
@@ -1258,13 +1334,15 @@ function rejectNode(state: typeof ConversationStateAnnotation.State) {
   // Surface the Critic's actual reasoning. A generic "could not verify" message
   // hides the real cause (e.g. "the itinerary changed your requested season"),
   // leaving the user to guess what went wrong.
-  const reasons = state.criticFeedback.slice(0, 3);
+  // Deterministic guardrail findings come first and are always accurate; the
+  // judge's prose is last and is only a hint, so it is labelled as such.
+  const reasons = state.criticFeedback.slice(0, 4);
   const detail = reasons.length
-    ? `\n\n**What held it back:**\n${reasons.map((r) => `- ${r}`).join('\n')}`
+    ? `\n\n**Reviewer notes:**\n${reasons.map((r) => `- ${r}`).join('\n')}\n\nTreat those as hints rather than verdicts — the reviewer is an AI and can misjudge details.`
     : '';
 
   return {
-    finalResponse: `I could not verify this itinerary strongly enough to share it safely.${detail}\n\nIf any of that looks wrong, tell me what to change — for example the exact dates — and I'll regenerate it.`,
+    finalResponse: `I could not verify this itinerary strongly enough to share it safely.${detail}\n\nTell me what to change — for example the exact dates — and I'll regenerate it.`,
   };
 }
 

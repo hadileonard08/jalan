@@ -11,7 +11,11 @@
  *   npx tsx scripts/test-date-window.ts
  */
 
-import { resolveSeasonalStartDate, hasStatedDateWindow } from '../src/agents/conversation-graph';
+import {
+  resolveSeasonalStartDate,
+  hasStatedDateWindow,
+  findItineraryDateMismatch,
+} from '../src/agents/conversation-graph';
 
 let failures = 0;
 function check(label: string, actual: unknown, expected: unknown) {
@@ -59,6 +63,30 @@ function run() {
   check('startDate resolves to spring 2027', resolved, '2027-03-20');
   check('the today+60d fallback does NOT fire', wouldInvent, false);
   check('it is not November 2026', resolved !== '2026-11-12', true);
+
+  console.log('\nfindItineraryDateMismatch (deterministic, so the numbers are right):');
+  const marchDraft = '### Day 1: Wednesday, March 20 - Arrival\n### Day 2: Thursday, March 21';
+  const novemberDraft = '### Day 1: Thursday, November 12 - Arrival\n### Day 2: Friday, November 13';
+
+  check('matching draft -> no finding', findItineraryDateMismatch(marchDraft, '2027-03-20', '2027-03-24'), null);
+  const flagged = findItineraryDateMismatch(novemberDraft, '2027-03-20', '2027-03-24');
+  check('wrong-season draft IS flagged', typeof flagged === 'string', true);
+  check('finding quotes the requested range', !!flagged && flagged.includes('2027-03-20 to 2027-03-24'), true);
+  check('finding quotes what the draft actually says', !!flagged && flagged.includes('November 12'), true);
+  // The whole point: no invented magnitude anywhere in the message.
+  check('finding makes no magnitude claim', !!flagged && !/\d+(\.\d+)?\s*(years?|months?)/i.test(flagged), true);
+
+  check('a trip spanning two months accepts both',
+    findItineraryDateMismatch('### Day 1: Sunday, September 30\n### Day 7: Saturday, October 6', '2026-09-30', '2026-10-06'), null);
+  check('month-only heading matches any year in range',
+    findItineraryDateMismatch('### Day 1: Monday, March 20', '2027-03-20', '2027-03-24'), null);
+  check('explicit wrong year is caught',
+    typeof findItineraryDateMismatch('### Day 1: Saturday, March 20, 2026', '2027-03-20', '2027-03-24'), 'string');
+  check('prose dates are ignored (headings only)',
+    findItineraryDateMismatch('Visit during the November 2026 festival.\n### Day 1: Arrival', '2027-03-20', '2027-03-24'), null);
+  check('undated headings -> no finding',
+    findItineraryDateMismatch('### Day 1: Welcome to Paradise\n### Day 2: Beaches', '2027-03-20', '2027-03-24'), null);
+  check('no requested dates -> no finding', findItineraryDateMismatch(novemberDraft, undefined, undefined), null);
 
   console.log('\n═══════════════════════════════════════════════════════════');
   console.log(failures === 0 ? '  RESULT: ✅ ALL TESTS PASSED' : `  RESULT: ❌ ${failures} FAILED`);

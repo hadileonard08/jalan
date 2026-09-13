@@ -143,7 +143,7 @@ flowchart TD
 | **Gather** | Tool Integration | Fetches weather (Open-Meteo), news (Gemini web search), live deals (Seats.aero), and destination images once. Retrieved context is retained across revisions. Also resets `clarificationCount` — the trip is finally being planned. |
 | **Generate** | LLM Generator | Creates the itinerary and packing list, then builds route links and transport guidance. Only this stage repeats when Critic requests self-correction. |
 | **Apply Refinements** | Delta Update | Surgical editor for the `refine` intent. Uses `gemini-3.5-flash-lite` with structured outputs to generate a JSON patch (array of edits), then applies it deterministically via `mergeItineraryPatch()`. Bypasses Gather and Generate entirely — only the edited day changes, all other days remain byte-for-byte identical. |
-| **Guardrails** | Deterministic Code | Verifies landmarks through Wikipedia, rejects past calendar dates, enforces the exact requested day count, and requires image placeholders. |
+| **Guardrails** | Deterministic Code | Verifies landmarks through Wikipedia, rejects past calendar dates, enforces the exact requested day count, requires image placeholders, and compares the dates printed in the itinerary's day headings against the requested dates — reporting both ranges verbatim rather than an estimated magnitude. |
 | **Critic** | RAG Evaluator | Runs an LLM-as-a-judge evaluation over `userQuery`, `retrievedContext`, and `draftItinerary`. Scores Context Relevance, Groundedness, and Answer Relevance from 1–5. Groundedness and Answer Relevance must both be at least 4. |
 | **Enrich** | Tool Integration | Runs transport (OSRM routing + Nominatim geocoding) and image hydration (Wikimedia + Openverse + Pexels) concurrently via `Promise.all()`. Builds interactive route maps and Google Maps links. |
 | **Answer** | Tool / DB | Handles deal-only lookups (e.g. *"find deals to Tokyo in December"*) with live Seats.aero search. |
@@ -618,7 +618,7 @@ scripts/
   test-clarify-loop.ts       # Clarify loop guard: streak counting across turns + 3-question cap (no LLM calls)
   test-checkpointer.ts       # Postgres checkpointer: reset coverage, durable state resumes, per-run state cannot leak
   test-interrupt-loop.ts     # interrupt()/resume mechanics: suspension, resume, pre-interrupt node does not re-run
-  test-date-window.ts        # Seasonal windows ("spring 2027") and when the date fallback may invent a date
+  test-date-window.ts        # Seasonal windows ("spring 2027"), when the date fallback may invent a date, and the deterministic itinerary-vs-requested date check
   test-readme-diagram.cjs    # Renders the README Mermaid diagram in a browser to catch syntax errors
   setup-checkpointer.ts      # One-time creation of the LangGraph checkpoint tables
   test-itinerary-cleanup.ts  # Trailing follow-up question stripping for saved itineraries
