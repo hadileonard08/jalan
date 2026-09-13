@@ -2,7 +2,7 @@
 
 **Live app:** https://jalan-ai.vercel.app
 
-A conversational travel planning assistant that turns natural-language requests into full day-by-day itineraries with live weather, real points flight deals, transport routing, packing lists, daily Google Maps route links, deterministic safety checks, and a RAG Triad LLM-as-a-judge self-correction loop — all powered by LangGraph and a hybrid Gemini model configuration.
+A conversational travel planning assistant that turns natural-language requests into full day-by-day itineraries with live weather, real points flight deals, transport routing, packing lists, daily Google Maps route links, deterministic safety checks, and a RAG Triad LLM-as-a-judge self-correction loop — all powered by LangGraph and a hybrid Gemini model configuration. Saved trips are **multiplayer**: invite friends as Followers or Master Planner Disciples, and let them propose AI-generated itinerary changes that only the Master Planner can approve.
 
 _"jalan" means "to walk" or "to travel" in Indonesian._
 
@@ -15,7 +15,7 @@ Built with Next.js 14, LangChain/LangGraph, PostgreSQL, Clerk auth, the Seats.ae
 Users chat with **Jalan**, a friendly travel companion that:
 
 1. **Understands natural-language trip requests** — e.g. *"Tokyo in October"*, *"honeymoon in Thailand"*, *"2 week Japan trip in December"*, *"find any deal to Bangkok in January"*.
-2. **Asks clarifying questions** when details are missing — dates, origin, budget, cabin, trip length. Handles vague messages gracefully with conversational follow-ups.
+2. **Asks clarifying questions** when details are missing — dates, origin, budget, cabin, trip length. Handles vague messages gracefully with conversational follow-ups, and stops after 3 in a row (see **Clarify Limit**) rather than looping forever.
 3. **Generates a full day-by-day itinerary** with:
    - Real weather forecast from Open-Meteo.
    - Live destination news and events (Gemini web search grounding).
@@ -31,9 +31,12 @@ Users chat with **Jalan**, a friendly travel companion that:
 10. **Shares trips via link** — generates a public, read-only shareable URL that displays the full itinerary with all payload sections (weather, transport, packing, deals, routes) and its own section navigator. Links never expire.
 11. **Refines existing itineraries via Delta Updates** — when a user asks to modify a previous plan (e.g. "swap day 2 lunch for a vegan spot", "make it shorter", "I don't drink beer"), the Extract node detects that an itinerary already exists and classifies the request as a `refine` intent. The `Apply Refinements` node then produces a Zod-validated JSON patch and a deterministic merger applies it surgically to `currentItinerary`. Unpatched versions are preserved in `previousItineraries`, so old plans are never permanently lost.
 12. **Interactive daily route maps** — each day's route is rendered on an interactive Leaflet map (CARTO Voyager tiles) with numbered markers, walking/transit polylines, and auto-fit bounds. Airport/departure stops are always anchored as the final waypoint.
-13. **One Stop collaboration** — per-day thumbs up/down feedback and comments alongside each day's itinerary, plus per-stop feedback, manual flight/hotel/train entries, and PDF document uploads for each saved trip. On desktop, each day renders in a 2-column layout with the itinerary on the left and the scrollable comment/voting panel pinned to the right; on mobile, comments are collapsed by default to prevent vertical bloat.
-14. **Traveler Profile** — authenticated users can save global travel preferences (dietary restrictions, transport preference, airline alliance, general notes) that are injected into the LangGraph system prompt so every generated itinerary honors them.
-15. **Mobile-optimized One Stop** — full-screen overlay on mobile with a native trip-selector dropdown, horizontally scrollable tabs with 44px touch targets, and no horizontal page scroll.
+13. **One Stop collaboration** — per-day thumbs up/down and comment threads alongside each day's itinerary, plus manual flight/hotel/train entries and PDF document uploads for each saved trip. On desktop, each day renders in a 2-column layout with the itinerary on the left and the scrollable comment/voting panel pinned to the right; on mobile, comments are collapsed by default to prevent vertical bloat.
+14. **Multiplayer AI collaboration with approval** — saved trips are shared with roles: the trip creator is the **Master Planner**, a co-planner is a **Master Planner Disciple**, and everyone else is a **Follower**. Followers can't edit the itinerary directly; they type a plain-English request under any day ("swap Day 2 lunch for a vegan spot") and the AI turns it into a JSON patch stored as a **pending proposal**. Master Planners and Disciples accept (patch merged deterministically into the saved itinerary), reject, or the suggester can edit & regenerate or withdraw their own. Accepted changes propagate to other collaborators without a page reload.
+15. **Trip invites** — Master Planners and Disciples mint 30-day invite links that add a signed-in friend as a Follower or Disciple. The member list resolves real names, emails, and avatars through the Clerk Backend API, and non-owners get **Leave trip** instead of Delete.
+16. **Live weather tab** — every saved trip stores a destination forecast refreshed by the daily weather cron, shown in a dedicated Weather tab (forecast for the trip dates when in range, current outlook otherwise), alongside the 48-hour departure rain/heat/wind alert banner.
+17. **Traveler Profile** — authenticated users can save global travel preferences (dietary restrictions, transport preference, airline alliance, general notes) that are injected into the LangGraph system prompt so every generated itinerary honors them.
+18. **Mobile-optimized One Stop** — full-page view on every screen size, with a native trip-selector dropdown, horizontally scrollable tabs with 44px touch targets, and no horizontal page scroll.
 
 ---
 
@@ -65,9 +68,10 @@ flowchart TD
     START(["START<br/>[System]"])
     END(["END<br/>[System]"])
 
-    state[("State<br/>currentItinerary · previousItineraries<br/>userPreferences · entities")]
+    state[("State<br/>currentItinerary · previousItineraries<br/>userPreferences · entities<br/>clarificationCount")]
     extract["Extract<br/>[LLM Router]<br/>parse intent + entities<br/>reads currentItinerary"]
-    clarify["Clarify<br/>[LLM Agent]<br/>conversational follow-up"]
+    clarify["Clarify<br/>[LLM Agent]<br/>conversational follow-up<br/>clarificationCount + 1"]
+    clarifyLimit["Clarify Limit<br/>[Safe Fallback]<br/>stop asking, suggest phrasing<br/>resets clarificationCount"]
     gather["Gather<br/>[Tool Integration]<br/>weather + news + deals + images"]
     generate["Generate<br/>[LLM Generator]<br/>itinerary + packing + transport"]
     applyRefinements["Apply Refinements<br/>[Delta Update]<br/>JSON Patch on currentItinerary<br/>preserves previousItineraries"]
@@ -85,15 +89,17 @@ flowchart TD
     %% Extract routing — consolidated labels to avoid overlap
     extract -->|"greeting"| respond
     extract -->|"vague · ask_question (missing) · plan_trip (missing)"| clarify
+    extract -->|"same, after 3 questions in a row"| clarifyLimit
     extract -->|"ask_question (complete)"| answer
     extract -->|"plan_trip"| gather
     extract -->|"refine (currentItinerary exists)"| applyRefinements
 
     %% Clarifications and direct answers are already final responses
     clarify --> END
+    clarifyLimit --> END
     answer --> END
 
-    %% Main pipeline
+    %% Main pipeline — Gather clears the clarification streak
     gather --> generate
     generate --> guardrails
     applyRefinements --> guardrails
@@ -116,8 +122,9 @@ flowchart TD
 | Node | Type | Description |
 |------|------|-------------|
 | **Extract** | LLM Router | Uses `chrono-node` + LLM to parse destination, dates, duration, cabin, travelers, budget, and intent. Yearless dates resolve to the next future occurrence; explicit past travel dates are rejected. Enforces a 30-day duration cap. |
-| **Clarify** | LLM Agent | Asks follow-up questions for missing fields and prompts users to replace invalid or past date ranges. |
-| **Gather** | Tool Integration | Fetches weather (Open-Meteo), news (Gemini web search), live deals (Seats.aero), and destination images once. Retrieved context is retained across revisions. |
+| **Clarify** | LLM Agent | Asks follow-up questions for missing fields and prompts users to replace invalid or past date ranges. Increments `clarificationCount` and ends the run, so the user's reply comes back through Extract on the next turn. |
+| **Clarify Limit** | Safe Fallback | Loop guard. After three clarifying questions in a row it stops asking and answers with concrete phrasing examples ("5 days in Tokyo in October"), then resets `clarificationCount` to 0. |
+| **Gather** | Tool Integration | Fetches weather (Open-Meteo), news (Gemini web search), live deals (Seats.aero), and destination images once. Retrieved context is retained across revisions. Also resets `clarificationCount` — the trip is finally being planned. |
 | **Generate** | LLM Generator | Creates the itinerary and packing list, then builds route links and transport guidance. Only this stage repeats when Critic requests self-correction. |
 | **Apply Refinements** | Delta Update | Surgical editor for the `refine` intent. Uses `gemini-3.5-flash-lite` with structured outputs to generate a JSON patch (array of edits), then applies it deterministically via `mergeItineraryPatch()`. Bypasses Gather and Generate entirely — only the edited day changes, all other days remain byte-for-byte identical. |
 | **Guardrails** | Deterministic Code | Verifies landmarks through Wikipedia, rejects past calendar dates, enforces the exact requested day count, and requires image placeholders. |
@@ -140,8 +147,11 @@ The Extract node is an **LLM router** — it classifies the user's intent and ch
 | *"I want to travel somewhere"* | `vague` | — | **Clarify** (warm follow-up with example ideas) |
 | *"Hi!"* | `greeting` | — | **Respond** (greeting back) |
 | *"Make it shorter"* (after a plan) | `refine` | No | **Apply Refinements** (JSON Patch on existing itinerary — bypasses Gather/Generate) |
+| *"somewhere warm I guess"* (3 questions already asked) | `vague` | — | **Clarify Limit** (stops asking, suggests how to phrase it, resets the counter) |
 
 **Clarify is a conditional detour, not a prerequisite.** If the user provides enough information upfront (destination + dates), the flow skips Clarify and goes directly to Gather. After Clarify asks for missing info and the user replies, the next turn re-routes through Extract — which then sends the complete request to Gather.
+
+**The clarification streak survives across turns without a checkpointer.** The graph runs statelessly per request (the whole conversation is replayed from PostgreSQL), so `clarificationCount` is derived each turn by `countTrailingClarifications()`: the chat route marks an assistant message with `payload.clarification` whenever the run ends at the Clarify node, and the counter walks backwards over consecutive marked messages. After `MAX_CLARIFICATIONS = 3` in a row, the router diverts to **Clarify Limit** instead of asking a fourth time. A LangGraph checkpointer is deliberately not used — `MemorySaver` would be useless on serverless (a new process per request) and a durable saver would duplicate the history the database already stores.
 
 The revision loop runs `Critic → Generate` (or `Critic → Apply Refinements` for the refine intent), so weather, news, flight, and image retrieval are not repeated. Critic reasoning is appended to graph state as generation feedback. After three unsuccessful drafts, Jalan returns a safe rejection instead of exposing an itinerary below the quality threshold.
 
@@ -329,20 +339,24 @@ The agent works for any destination worldwide — not just a fixed set of cities
 
 ### One Stop panel
 
-A sign-in-gated modal accessible from the left sidebar that lets users:
+A sign-in-gated full-page view accessible from the left sidebar that lets users:
 
 - **Save** any assistant response (deals, itinerary, packing list, route links, transport plan).
 - **Duplicate prevention** — server-side and client-side checks prevent saving the same trip twice (by conversationId or destination + dates).
-- **View saved trips** — on desktop, a trip selector sidebar lists all trips; on mobile, a native `<select>` dropdown at the top.
+- **View saved trips** — trips you own plus trips you were invited to; a trip selector sidebar on desktop, a native `<select>` dropdown on mobile.
 - **Manage to-dos** — add, check off, and delete tasks per trip.
-- **Write notes** — free-form notes per trip.
-- **Per-stop collaboration** — thumbs up/down feedback and comments on individual landmarks, persisted per saved trip.
-- **Flights & Docs** — manual flight/hotel/train/car entries with confirmation codes, plus PDF document uploads (e-tickets, vouchers) stored as base64 data URLs.
+- **Notes** — timestamped note entries with an **Add note** button, plus the legacy free-form notes field when a trip has one.
+- **Per-day collaboration** — thumbs up/down and a scrollable comment thread for every day, with the itinerary on the left and the collaboration panel pinned to the right.
+- **Suggest a change (AI proposals)** — under each day's comments, any collaborator can describe a change; the AI generates a JSON patch and stores it as a pending proposal. Owner-level roles get Accept/Reject plus a "waiting for approval" badge in the trip header that opens a review sheet; suggesters get Edit & regenerate and Withdraw on their own pending suggestions.
+- **Roles and invites** — Master Planner / Master Planner Disciple / Follower badges, invite links, member list with real names and avatars, and Leave trip for non-owners.
+- **Flights & Docs** — manual flight/hotel/train/car entries with confirmation codes, plus PDF document uploads (e-tickets, vouchers) stored as base64 data URLs. A PDF can be attached to a booking at creation time so tickets and bookings stay together.
+- **Weather tab** — the destination forecast stored by the daily weather cron, with a "forecast for your trip" view when the dates are in range and the current outlook otherwise.
 - **Interactive route maps** — each day's route is rendered on a Leaflet map with CARTO Voyager tiles.
+- **Live sync** — the panel polls every 30s while open, so suggestions from other collaborators and itinerary changes they had accepted appear without a reload. Only server-owned fields (weather, payload) are merged, so unsynced local edits are never clobbered.
 - **Copy trip summary** — copies everything to clipboard.
-- **Delete trips** — organized copy + delete buttons in each trip card header.
+- **Delete trips** — owner-level only; collaborators get Leave trip.
 - **Itinerary images** — the itinerary tab renders images inline with proper styling.
-- **Mobile-optimized** — full-screen overlay on mobile (100vw x 100dvh), horizontally scrollable tabs with 44px touch targets, no horizontal page scroll, responsive form grids.
+- **Mobile-optimized** — full-page on every breakpoint, horizontally scrollable tabs with 44px touch targets, no horizontal page scroll, responsive form grids.
 - **Persist** — saved trips are stored in PostgreSQL (signed-in users) or `localStorage` (guests).
 
 ---
@@ -422,19 +436,29 @@ A sign-in-gated modal accessible from the left sidebar that lets users:
 - 30-day maximum trip duration.
 
 ### One Stop panel
-- Sign-in-gated modal — full-screen overlay on mobile, centered 95vw x 90vh on desktop.
+- Sign-in-gated **full-page view** on every breakpoint.
 - Save deals, itinerary (with inline images), packing list, transport plan, and routes.
 - **Duplicate prevention** — server-side and client-side checks by conversationId or destination + dates.
 - **Trip selector** — sidebar on desktop, native `<select>` dropdown on mobile.
-- **Per-stop collaboration** — thumbs up/down feedback and comments on individual landmarks.
-- **Flights & Docs** — manual flight/hotel/train entries + PDF document uploads.
+- **Per-day collaboration** — thumbs up/down plus comment threads, rendered next to each day.
+- **AI change proposals** — followers suggest in plain English, owner-level roles approve or reject, accepted patches merge deterministically.
+- **Roles & invites** — Master Planner / Disciple / Follower, 30-day invite links, member list with real names and avatars.
+- **Flights & Docs** — manual flight/hotel/train entries + PDF document uploads, attachable to a booking.
+- **Weather tab** — cron-refreshed destination forecast for the trip.
 - **Interactive route maps** — Leaflet maps with CARTO Voyager tiles per day.
-- To-do list and notes per trip.
-- Copy-to-clipboard and delete buttons organized in each trip card header.
+- To-do list and timestamped notes per trip.
+- Copy-to-clipboard, invite, and delete/leave actions in each trip card header.
 - PostgreSQL persistence (signed-in) or localStorage (guests).
 
+### Multiplayer AI collaboration
+- **Roles** — the trip creator is the Master Planner, a co-planner is a Master Planner Disciple, everyone else is a Follower. Enforced server-side, not just in the UI.
+- **Followers never edit the itinerary directly.** They submit a natural-language suggestion under a specific day; `generateItineraryPatch()` turns it into a Zod-validated JSON patch stored as `pending`.
+- **Approval merges deterministically** — accepting runs the same `mergeItineraryPatch()` reducer the refine flow uses, so only the targeted day changes. A patch that no longer matches anything returns 422 instead of silently marking itself accepted.
+- **Suggestion lifecycle** — the suggester can reword and regenerate a pending suggestion in place, or withdraw it. Reviewed suggestions are kept as the decision record.
+- **Live propagation** — accepted changes reach other collaborators' open panels within ~30 seconds, and instantly when they reopen One Stop.
+
 ### Mobile-optimized
-- **One Stop panel** — full-screen overlay (100vw x 100dvh) on mobile, native trip-selector dropdown, horizontally scrollable tabs with 44px touch targets, responsive form grids, no horizontal page scroll.
+- **One Stop panel** — full-page view on every breakpoint, native trip-selector dropdown, horizontally scrollable tabs with 44px touch targets, responsive form grids, no horizontal page scroll.
 - No horizontal scroll — all content fits within the viewport.
 - Images and tables scroll within their containers, not the page.
 - Auto-scroll to top when itinerary finishes generating.
@@ -449,10 +473,23 @@ A sign-in-gated modal accessible from the left sidebar that lets users:
 - `DELETE /api/chat/conversations/[id]` — delete a conversation.
 - `GET /api/chat/history` — load message history for a conversation.
 - `POST /api/chat/merge-session` — merge anonymous session into user account on sign-in.
-- `GET /api/saved-trips` — list saved trips for the current user.
+- `GET /api/saved-trips` — list trips you own **plus trips you were invited to**.
 - `POST /api/saved-trips` — create a saved trip (with duplicate detection by conversationId or destination + dates).
-- `PATCH /api/saved-trips/[id]` — update trip todos, notes, feedback, flight info, documents.
-- `DELETE /api/saved-trips/[id]` — delete a saved trip.
+- `GET /api/saved-trips/[id]` — fetch a single trip; used by One Stop's 30s live-sync poll.
+- `PATCH /api/saved-trips/[id]` — update todos, notes, note entries, feedback, day feedback, flight info, documents. Allowed for owners, Disciples, and Followers (the itinerary itself only changes through approved proposals).
+- `DELETE /api/saved-trips/[id]` — delete a saved trip (owner level only; collaborators leave instead).
+- `GET /api/saved-trips/[id]/proposals` — list proposals for a trip plus the caller's role (`owner` / `co-planner` / `collaborator`).
+- `POST /api/saved-trips/[id]/proposals` — submit a suggestion; the AI generates a JSON patch stored as `pending` (never applied directly).
+- `PATCH /api/saved-trips/[id]/proposals/[proposalId]` — accept or reject (owner level only); accepting merges the patch and returns the updated trip.
+- `PUT /api/saved-trips/[id]/proposals/[proposalId]` — the suggester rewords their own pending suggestion; the patch is regenerated in place.
+- `DELETE /api/saved-trips/[id]/proposals/[proposalId]` — the suggester (or owner level) withdraws a pending suggestion.
+- `GET` / `POST /api/saved-trips/[id]/invites` — list or mint 30-day invite links (owner level only).
+- `GET /api/saved-trips/[id]/members` — members with role plus names/emails/avatars resolved via the Clerk Backend API.
+- `DELETE /api/saved-trips/[id]/members/[memberId]` — remove a member (owner level) or leave the trip (`me`).
+- `GET /api/invites/[token]` — invite details shown on the join page (public).
+- `POST /api/invites/[token]` — join the trip with the invited role.
+- `GET` / `PATCH /api/user-preferences` — read or update the signed-in user's Traveler Profile.
+- `GET /api/cron/weather-check` — daily cron: 48-hour departure alerts plus destination forecast snapshots for every saved trip.
 - `POST /api/share` — create a shareable link for a conversation's latest itinerary (server-side storage, never expires).
 - `GET /api/share/[id]` — fetch a shared trip by ID (public, no auth required).
 - `GET /api/deals` — paginated cached deals (legacy dashboard support).
@@ -501,6 +538,10 @@ src/
     airline-booking.ts       # Airline-specific booking URL builder
     chat-state.ts            # Shared types + ItineraryPatchSchema (Zod) for Delta Updates
     chat-db.ts               # Conversation persistence
+    trip-access.ts           # Single source of truth for trip roles (owner / co-planner / collaborator)
+    serialize-trip.ts        # Shared SavedTrip serializer for every saved-trip route
+    clerk-users.ts           # Resolves member IDs to names/avatars via the Clerk Backend API (cached)
+    itinerary-cleanup.ts     # Strips trailing AI follow-up questions from saved itineraries
     ai-provider.ts           # LLM model configuration (hybrid: speed + quality models)
     ragEvaluator.ts          # Typed RAG Triad LLM-as-a-judge evaluation
     airports.ts              # Airport code/name mappings (70+ global destinations)
@@ -510,8 +551,9 @@ src/
   components/
     chat/
       ChatPage.tsx           # Main chat UI with sidebar, messages, section navigator, One Stop panel
-      OneStopPanel.tsx       # Sign-in-gated modal: saved trips, to-dos, notes, collaboration, flights & docs
+      OneStopPanel.tsx       # Full-page One Stop: saved trips, to-dos, notes, per-day collaboration, AI proposals, invites, weather, flights & docs
       DailyRouteMap.tsx      # Interactive Leaflet map (CARTO Voyager tiles) with numbered markers + polylines
+      TravelerProfileModal.tsx # Traveler Profile: dietary/transport/airline preferences injected into the prompt
     SplashRedirect.tsx       # Redirects old domain to jalan-ai.vercel.app
     WalkersIcon.tsx          # Custom walking figure logo
     AuthProvider.tsx         # Clerk provider wrapper
@@ -520,18 +562,29 @@ src/
       chat/route.ts          # Streaming chat endpoint (SSE)
       chat/conversations/    # Conversation CRUD
       chat/history/          # Message history
-      saved-trips/route.ts   # Saved trip CRUD with duplicate detection
+      saved-trips/route.ts   # Saved trip list (owned + shared) and create with duplicate detection
+      saved-trips/[id]/      # GET single trip, PATCH collaborative fields, DELETE (owner level)
+      saved-trips/[id]/proposals/         # GET/POST suggestions, PATCH accept/reject, PUT regenerate, DELETE withdraw
+      saved-trips/[id]/invites/           # GET/POST 30-day invite links (owner level)
+      saved-trips/[id]/members/           # GET member list, DELETE remove or leave
+      invites/[token]/route.ts            # GET invite details, POST join
+      user-preferences/route.ts           # Traveler Profile read/write
+      cron/weather-check/route.ts         # Daily alerts + destination forecast snapshots
       share/route.ts         # POST: create shareable trip link
       share/[id]/route.ts    # GET: fetch shared trip (public, no auth)
       ...
+    invite/[token]/page.tsx  # Join-a-trip page (role preview, sign-in, accept)
     share/[id]/page.tsx      # Public read-only shared trip page with section nav
   db/
-    schema.ts                # Drizzle schema: flights, deals, conversations, messages, shared_trips, geocoded_locations
+    schema.ts                # Drizzle schema: flights, deals, conversations, messages, shared_trips, saved_trips, trip_collaborators, trip_invites, trip_proposals, user_preferences, geocoded_locations
 scripts/
   smoke-test.ts              # Local/production smoke tests (46 assertions, including date safety and exact duration)
   test-date-normalization.ts # Deterministic past-date and inclusive-duration regression tests
   test-rag-evaluator.ts      # Structured RAG evaluator test with dummy retrieved context
-  test-refine-patch.ts       # Delta Update merger test — asserts Days 1 & 3 unchanged when editing Day 2
+  test-refine-patch.ts       # Delta Update merger test — Days 1 & 3 unchanged when editing Day 2, plus a multi-stop prose-line regression
+  test-clarify-loop.ts       # Clarify loop guard: streak counting across turns + 3-question cap (no LLM calls)
+  test-itinerary-cleanup.ts  # Trailing follow-up question stripping for saved itineraries
+  test-weather-alerts.ts     # Weather thresholds, cron auth, date targeting, snapshot building (mocked)
   test-route-optimization.ts # OSRM Table Service + 2-opt route optimization test (Paris fixture)
   test-seattle-geocode.ts    # Geocoding validation test (day-trip destinations within 200km)
   test-images.ts             # Local image testing without consuming Gemini tokens
@@ -555,6 +608,7 @@ scripts/
    - `QUALITY_MODEL` — optional, defaults to `gemini-3.5-flash` (quality-critical nodes).
    - `PEXELS_API_KEY` — optional, enables Pexels as a 4th image source.
    - `NEXT_PUBLIC_CARTO_API_KEY` — optional, enables authenticated CARTO Voyager map tiles (free within fair use).
+   - `CRON_SECRET` — required for the Vercel cron endpoints (weather alerts/snapshots); requests without a matching `Authorization: Bearer` header get a 401.
 
 3. **Run the database migration:**
    ```bash
@@ -585,14 +639,17 @@ scripts/
    ```
    The suite verifies deals, logistics, images, routes, transport, Wikipedia landmarks, exact itinerary duration, absence of past dates, and rejection of explicit past-date requests. Add `--skip-chat` to avoid Gemini usage when testing non-chat APIs.
 
-8. **Run focused date and RAG tests:**
+8. **Run focused date, RAG, and collaboration tests** (no Gemini tokens consumed):
    ```bash
    npx tsx scripts/test-date-normalization.ts
    npx tsx scripts/test-rag-evaluator.ts
    npx tsx scripts/test-refine-patch.ts
+   npx tsx scripts/test-clarify-loop.ts
+   npx tsx scripts/test-itinerary-cleanup.ts
+   npx tsx scripts/test-weather-alerts.ts
    npx tsx scripts/test-route-optimization.ts
    ```
-   `test-refine-patch.ts` verifies the Delta Update merger: mocks a 3-day itinerary, applies a "swap day 2 lunch" patch, and asserts Days 1 and 3 are byte-for-byte identical. `test-route-optimization.ts` tests OSRM Table Service + 2-opt with a Paris fixture (Louvre, Sacré-Cœur, Musée d'Orsay).
+   `test-refine-patch.ts` verifies the Delta Update merger: mocks a 3-day itinerary, applies a "swap day 2 lunch" patch, asserts Days 1 and 3 are byte-for-byte identical, and includes a regression for stops that share a prose line with other bold stops. `test-clarify-loop.ts` covers the clarification streak counter and the 3-question cap. `test-route-optimization.ts` tests OSRM Table Service + 2-opt with a Paris fixture (Louvre, Sacré-Cœur, Musée d'Orsay).
 
 9. **Run local image tests** (without consuming Gemini tokens):
    ```bash
@@ -619,10 +676,13 @@ scripts/
 - Supports **70+ global destinations** with country-to-airport-code mapping for deal searches, and fallback to city name for weather, news, and images when IATA codes aren't in the lookup tables.
 - Built a **share trip link feature** — generates public, read-only shareable URLs (stored server-side in PostgreSQL, never expire) that display the full itinerary with all payload sections and a section navigator.
 - Built a **Gemini-style sidebar** with New trip, One Stop, and recent conversations as nav items, plus a closable sign-in prompt for guests. Logo is clickable to navigate home.
-- Built a **One Stop panel** (sign-in-gated modal) with a trip selector (sidebar on desktop, dropdown on mobile), inline itinerary images, to-dos, notes, per-stop collaboration (thumbs up/down + comments), manual flight/hotel/train entries, PDF document uploads, interactive route maps, copy summary, and delete — all organized in clean card headers. Includes **duplicate trip prevention** (server-side + client-side by conversationId or destination + dates).
+- Built a **One Stop panel** (sign-in-gated, full-page) with a trip selector (sidebar on desktop, dropdown on mobile), inline itinerary images, to-dos, timestamped notes, per-day collaboration (thumbs up/down + comment threads), AI change proposals, manual flight/hotel/train entries, PDF document uploads attachable to a booking, a cron-refreshed weather tab, interactive route maps, copy summary, and delete/leave — all organized in clean card headers. Includes **duplicate trip prevention** (server-side + client-side by conversationId or destination + dates).
+- Designed **multiplayer AI collaboration with an approval gate**: roles (Master Planner / Master Planner Disciple / Follower) enforced server-side in one shared access helper; Followers describe a change in plain English and the AI converts it into a stored JSON patch that only owner-level roles can accept. Accepting reuses the deterministic `mergeItineraryPatch()` reducer, a patch that no longer matches returns 422 instead of falsely succeeding, and accepted changes propagate to other collaborators' open panels within ~30 seconds.
+- Added **trip invites** — 30-day multi-use invite links with role selection, a member list resolving real names/emails/avatars through the Clerk Backend API (5-minute cache, 5s timeout, graceful fallback to the ID), and a **Leave trip** path for non-owners.
+- Added a **clarification loop guard** to the LangGraph flow: the streak of consecutive clarifying questions is derived from persisted history (no checkpointer, which would be useless on serverless), and after 3 in a row the router diverts to a fallback node that suggests concrete phrasing and resets the counter.
 - Integrated **Clerk authentication** with anonymous session merging and sign-in-gated features.
 - Added **vague message handling** — when users send unclear messages, the agent asks warm, conversational follow-ups with example trip ideas.
 - Used **chrono-node** for flexible natural-language date parsing (e.g. *"in two weeks"*, *"next October"*, *"2 week trip"*).
-- Optimized **mobile experience** — full-screen One Stop overlay (100vw x 100dvh), native trip-selector dropdown, horizontally scrollable tabs with 44px touch targets, no horizontal page scroll, auto-scroll to top on itinerary completion, responsive layout with mobile sidebar drawer, floating section navigator button.
+- Optimized **mobile experience** — full-page One Stop on every breakpoint, native trip-selector dropdown, horizontally scrollable tabs with 44px touch targets, no horizontal page scroll, auto-scroll to top on itinerary completion, responsive layout with mobile sidebar drawer, floating section navigator button.
 - Implemented **local and post-deploy smoke tests** with 46 assertions covering date safety, exact duration, explicit past-date rejection, RAG-sensitive chat quality, routes, transport, images, deals, and Wikipedia landmark verification.
 - Added **local image testing script** (`scripts/test-images.ts`) for testing image fetching without consuming Gemini tokens.
