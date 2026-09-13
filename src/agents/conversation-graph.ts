@@ -29,6 +29,21 @@ const COMPANION_PERSONA = `You are Jalan, a friendly travel companion. You are w
 
 const DEFAULT_TRIP_DAYS = 5;
 const MAX_TRIP_DAYS = 30; // Guardrail: cap itineraries at 30 days
+const MAX_CLARIFICATIONS = 3; // Guardrail: consecutive questions before we stop asking
+
+// The graph runs statelessly per request, so the clarification streak is
+// derived from persisted history rather than a checkpointer: an assistant
+// message marked as a clarification continues the streak, anything else ends it.
+export function countTrailingClarifications(history: PersistedMessage[]): number {
+  let count = 0;
+  for (let i = history.length - 1; i >= 0; i--) {
+    const message = history[i];
+    if (message.role !== 'assistant') continue;
+    if (message.payload?.clarification) count++;
+    else break;
+  }
+  return count;
+}
 
 type RetrievedDeal = Awaited<ReturnType<typeof getRelevantDeals>>[number];
 type TransportPlan = Awaited<ReturnType<typeof buildTransportPlan>>;
@@ -45,6 +60,7 @@ const ConversationStateAnnotation = Annotation.Root({
   entities: Annotation<ExtractedEntities>({ reducer: (_curr, next) => next, default: () => ({}) }),
   userPreferences: Annotation<UserPreferences | null>({ reducer: (_curr, next) => next, default: () => null }),
   missingFields: Annotation<string[]>({ reducer: (_curr, next) => next, default: () => [] }),
+  clarificationCount: Annotation<number>({ reducer: (_curr, next) => next, default: () => 0 }),
   questions: Annotation<ClarifyingQuestion[]>({ reducer: (_curr, next) => next, default: () => [] }),
   weather: Annotation<unknown | null>({ reducer: (_curr, next) => next, default: () => null }),
   news: Annotation<string | null>({ reducer: (_curr, next) => next, default: () => null }),
@@ -268,6 +284,8 @@ User: ${state.userMessage}
     dateValidationError,
     missingFields: stillMissing.length ? stillMissing : missingFields,
     currentItinerary,
+    // Seed the streak from prior turns so the loop guard survives requests.
+    clarificationCount: countTrailingClarifications(state.history),
   };
 }
 
@@ -415,8 +433,12 @@ function inferDurationDays(text: string): number | undefined {
 
 async function clarifyNode(state: typeof ConversationStateAnnotation.State) {
   if (!llm) throw new Error('AI provider not configured');
+  // Each clarifying question advances the streak; the reply comes back into
+  // Extract on the next turn, which re-seeds the count from history.
+  const clarificationCount = state.clarificationCount + 1;
+
   if (state.dateValidationError) {
-    return { questions: [], finalResponse: state.dateValidationError };
+    return { questions: [], finalResponse: state.dateValidationError, clarificationCount };
   }
 
   const isVague = state.entities.intent === 'vague';
@@ -442,22 +464,50 @@ Respond ONLY in plain text (no JSON, no markdown headers).`;
 
   const res = await llm.invoke(prompt);
   const finalResponse = (res.content as string).trim() || 'I need a bit more info to plan your trip.';
-  return { questions: [], finalResponse };
+  return { questions: [], finalResponse, clarificationCount };
+}
+
+// Loop guard: once we've asked MAX_CLARIFICATIONS questions in a row without
+// getting anywhere, stop asking and hand the user a concrete way forward.
+export function nextClarifyRoute(clarificationCount: number) {
+  return clarificationCount >= MAX_CLARIFICATIONS ? 'clarifyLimit' : 'clarify';
+}
+
+function routeToClarify(state: typeof ConversationStateAnnotation.State) {
+  return nextClarifyRoute(state.clarificationCount);
 }
 
 function routeAfterExtract(state: typeof ConversationStateAnnotation.State) {
-  if (state.dateValidationError) return 'clarify';
+  if (state.dateValidationError) return routeToClarify(state);
   if (state.entities.intent === 'greeting') return 'respond';
-  if (state.entities.intent === 'vague') return 'clarify';
+  if (state.entities.intent === 'vague') return routeToClarify(state);
   if (state.entities.intent === 'ask_question') {
-    if (state.missingFields.length > 0) return 'clarify';
+    if (state.missingFields.length > 0) return routeToClarify(state);
     return 'answer';
   }
   // Refine intent: bypass Gather/Generate and go directly to the delta-update
   // node, which surgically edits the existing itinerary from history.
   if (state.entities.intent === 'refine' && state.entities.destination) return 'applyRefinements';
-  if (state.missingFields.length > 0) return 'clarify';
+  if (state.missingFields.length > 0) return routeToClarify(state);
   return 'gather';
+}
+
+// Fallback after too many clarifying questions: be useful instead of looping.
+function clarifyLimitNode(state: typeof ConversationStateAnnotation.State) {
+  const missing = state.missingFields.length > 0 ? state.missingFields : ['destination', 'dates'];
+
+  return {
+    clarificationCount: 0,
+    finalResponse: `I don't want to keep asking — let's just get moving.
+
+I still need **${missing.join(' and ')}** to build a real itinerary. The quickest way is to say it in one line, for example:
+
+- "5 days in Tokyo in October"
+- "A long weekend in Lisbon, flexible dates"
+- "Two weeks in Peru next June, mid-range budget"
+
+If you'd rather browse first, tell me a region or a vibe (beaches, food, mountains) and I'll suggest where to go and when.`,
+  };
 }
 
 async function gatherNode(state: typeof ConversationStateAnnotation.State) {
@@ -489,6 +539,8 @@ async function gatherNode(state: typeof ConversationStateAnnotation.State) {
 
   const images = { destination: imageResult || '' };
   return {
+    // We finally have enough to plan, so the clarification streak is over.
+    clarificationCount: 0,
     entities: endDate
       ? { ...state.entities, endDate: endDate.toISOString().split('T')[0] }
       : state.entities,
@@ -1155,6 +1207,7 @@ Title:`;
 export const conversationGraph = new StateGraph(ConversationStateAnnotation)
   .addNode('extract', extractNode)
   .addNode('clarify', clarifyNode)
+  .addNode('clarifyLimit', clarifyLimitNode)
   .addNode('answer', answerNode)
   .addNode('gather', gatherNode)
   .addNode('generate', generateNode)
@@ -1167,6 +1220,7 @@ export const conversationGraph = new StateGraph(ConversationStateAnnotation)
   .addEdge(START, 'extract')
   .addConditionalEdges('extract', routeAfterExtract)
   .addEdge('clarify', END)
+  .addEdge('clarifyLimit', END)
   .addEdge('answer', END)
   .addEdge('gather', 'generate')
   .addEdge('generate', 'guardrails')

@@ -85,6 +85,9 @@ export interface ChatPayload {
   transportPlan?: TransportPlan;
   packingTips?: string;
   feedback?: string[];
+  // Marks an assistant message that asked a clarifying question, so the next
+  // turn can tell how many consecutive questions have been asked.
+  clarification?: boolean;
 }
 
 export interface PersistedMessage {
@@ -99,6 +102,9 @@ export interface ConversationState {
   entities: ExtractedEntities;
   userPreferences?: UserPreferences | null;
   missingFields: string[];
+  // Consecutive clarifying questions asked so far in this thread. Seeded from
+  // history each turn and reset once the trip is actually planned.
+  clarificationCount: number;
   questions: ClarifyingQuestion[];
   weather: any | null;
   news: string | null;

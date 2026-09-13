@@ -121,7 +121,7 @@ npx tsx scripts/smoke-test.ts
 ```
 User message
   -> Extract (entity extraction, date normalization)
-  -> Clarify (if missing fields) | Answer (if question) | Gather (if trip plan)
+  -> Clarify (if missing fields) | ClarifyLimit (after 3 in a row) | Answer (if question) | Gather (if trip plan)
 
 Gather (one-time: weather, news, deals, destination image)
   -> Generate (itinerary + packing tips, retryable)
@@ -132,6 +132,12 @@ Gather (one-time: weather, news, deals, destination image)
      -> if 3 failures: Reject
   -> Respond (final assembly, SSE streaming)
 ```
+
+### Clarification loop (no checkpointer by design)
+- The graph runs **statelessly per request**: `loadMessages()` replays the whole conversation and `history` is passed into the graph, so a reply to a clarifying question already loops back into `Extract` with full context. A LangGraph checkpointer is deliberately not used — `MemorySaver` is useless on serverless (new process per request) and a durable saver would duplicate the history the DB already stores.
+- The loop guard is therefore **derived from history**, not checkpointed state: `countTrailingClarifications()` walks backwards and counts assistant messages whose payload has `clarification: true`. The chat route sets that flag whenever the graph ends at the `clarify` node.
+- `MAX_CLARIFICATIONS = 3`: after three consecutive questions `routeAfterExtract` diverts to `clarifyLimit`, which returns a concrete "here's how to phrase it" message and resets the count to 0. `Gather` also resets to 0 once the trip is actually being planned.
+- Test: `npx tsx scripts/test-clarify-loop.ts` (no LLM calls).
 
 ### Enrichment pipeline (post-approval)
 - **Transport:** Geocode stops via Nominatim (cached), route via OSRM (walking + driving in parallel), LLM transit tips.

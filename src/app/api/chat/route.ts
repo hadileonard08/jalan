@@ -91,6 +91,7 @@ export async function POST(req: Request) {
       const statusMap: Record<string, string> = {
         extract: 'Thinking...',
         clarify: 'Asking a quick question...',
+        clarifyLimit: 'Finding another way...',
         answer: 'Looking that up...',
         gather: 'Planning your trip...',
         applyRefinements: 'Updating your itinerary...',
@@ -102,6 +103,9 @@ export async function POST(req: Request) {
       try {
         let result: any = {};
         let previewSent = false;
+        // Marks the persisted message so the next turn can count how many
+        // clarifying questions in a row we've asked (loop guard).
+        let askedClarifyingQuestion = false;
 
         const streamUserPreferences = await getUserPreferences(userId);
 
@@ -114,6 +118,9 @@ export async function POST(req: Request) {
           for (const [nodeName, update] of Object.entries(chunk)) {
             if (nodeName in statusMap) {
               emit({ type: 'status', message: statusMap[nodeName] });
+            }
+            if (nodeName === 'clarify') {
+              askedClarifyingQuestion = true;
             }
             if (typeof update === 'object' && update !== null) {
               result = { ...result, ...update };
@@ -155,6 +162,7 @@ export async function POST(req: Request) {
           transportPlan: result.transportPlan || undefined,
           packingTips: result.packingTips,
           feedback: result.criticFeedback?.length ? result.criticFeedback : undefined,
+          clarification: askedClarifyingQuestion || undefined,
         };
 
         emit({ type: 'done', payload, conversationId: conversation.id });
