@@ -8,7 +8,6 @@ import {
   FileText, Upload, Download, Hotel, Train, Car, ChevronDown, ChevronUp,
   AlertTriangle, Sparkles, UserCog,
 } from 'lucide-react';
-import { useUser } from '@/components/AuthProvider';
 import type {
   SavedTrip, ChatPayload, StopFeedback, StopComment, DayFeedback, DayComment,
   ManualFlightEntry, UploadedDocument, WeatherSnapshot, TripProposal,
@@ -403,10 +402,37 @@ function DayFeedbackBar({
 
 // --- Itinerary tab with per-day feedback ---
 
-function ItineraryTab({ trip, onUpdate }: { trip: SavedTrip; onUpdate: (trip: SavedTrip) => void }) {
+function ItineraryTab({
+  trip,
+  onUpdate,
+  proposalRole,
+  proposals,
+  submittingDay,
+  onSubmitProposal,
+  onReviewProposal,
+  proposalActionId,
+}: {
+  trip: SavedTrip;
+  onUpdate: (trip: SavedTrip) => void;
+  proposalRole: 'owner' | 'collaborator' | null;
+  proposals: TripProposal[];
+  submittingDay: number | null;
+  onSubmitProposal: (day: number, prompt: string) => Promise<boolean>;
+  onReviewProposal: (proposalId: string, action: 'accept' | 'reject') => void;
+  proposalActionId: string | null;
+}) {
   const payload = trip.payload;
   // Saved plans shouldn't include the assistant's closing follow-up questions.
   const dayBlocks = splitItineraryByDay(stripFollowUpQuestions(payload.itinerary || ''));
+  const itineraryDays = new Set(
+    dayBlocks.map((block) => block.day).filter((day): day is number => day !== undefined)
+  );
+  // Suggestions that don't map to a day still in the itinerary (e.g. vague
+  // requests that produced no edits) are listed at the end instead.
+  const unassignedProposals = proposals.filter((proposal) => {
+    const days = proposalDays(proposal);
+    return days.length === 0 || days.every((day) => !itineraryDays.has(day));
+  });
 
   const markdownComponents = {
     img: ({ src, alt }: any) => (
@@ -443,10 +469,26 @@ function ItineraryTab({ trip, onUpdate }: { trip: SavedTrip; onUpdate: (trip: Sa
                 Day {day}
               </div>
               <DayFeedbackBar dayIndex={day} trip={trip} onUpdate={onUpdate} />
+              <DayProposalBox
+                day={day}
+                role={proposalRole}
+                proposals={proposals.filter((proposal) => proposalDays(proposal).includes(day))}
+                submitting={submittingDay === day}
+                onSubmit={onSubmitProposal}
+                onReview={onReviewProposal}
+                actionId={proposalActionId}
+              />
             </div>
           </div>
         )
       )}
+
+      <UnassignedProposals
+        role={proposalRole}
+        proposals={unassignedProposals}
+        onReview={onReviewProposal}
+        actionId={proposalActionId}
+      />
     </div>
   );
 }
@@ -1020,139 +1062,162 @@ function formatPatchPreview(patch: TripProposal['patchData']) {
   }).join(' • ');
 }
 
-function ProposalsSection({
+// Days a proposal touches, derived from its patch edits.
+function proposalDays(proposal: TripProposal): number[] {
+  const days = (proposal.patchData?.edits || [])
+    .map((edit) => edit.dayNumber)
+    .filter((day) => Number.isFinite(day));
+  return Array.from(new Set(days));
+}
+
+const PROPOSAL_STATUS_STYLES: Record<TripProposal['status'], string> = {
+  pending: 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300',
+  accepted: 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300',
+  rejected: 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400',
+};
+
+function ProposalCard({
+  proposal,
+  canReview,
+  actionId,
+  onReview,
+}: {
+  proposal: TripProposal;
+  canReview: boolean;
+  actionId: string | null;
+  onReview: (proposalId: string, action: 'accept' | 'reject') => void;
+}) {
+  return (
+    <div className="border border-gray-200 dark:border-gray-700 rounded-xl p-2.5 bg-white dark:bg-gray-800 space-y-2">
+      <div className="text-[13px] text-gray-900 dark:text-gray-100">&ldquo;{proposal.suggestedPrompt}&rdquo;</div>
+      <div className="text-[12px] text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-900/40 rounded-lg p-2">
+        <span className="font-medium text-gray-600 dark:text-gray-300">AI patch:</span> {formatPatchPreview(proposal.patchData)}
+      </div>
+      {canReview && proposal.status === 'pending' ? (
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => onReview(proposal.id, 'accept')}
+            disabled={actionId === proposal.id}
+            className="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 text-[13px] font-medium rounded-lg bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300 hover:bg-green-200 dark:hover:bg-green-900/50 disabled:opacity-60"
+          >
+            {actionId === proposal.id ? <span className="animate-spin">⟳</span> : <CheckSquare size={13} />}
+            Accept
+          </button>
+          <button
+            onClick={() => onReview(proposal.id, 'reject')}
+            disabled={actionId === proposal.id}
+            className="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 text-[13px] font-medium rounded-lg bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 hover:bg-red-200 dark:hover:bg-red-900/50 disabled:opacity-60"
+          >
+            {actionId === proposal.id ? <span className="animate-spin">⟳</span> : <X size={13} />}
+            Reject
+          </button>
+        </div>
+      ) : (
+        <span className={`text-[11px] inline-flex items-center px-2 py-0.5 rounded-full ${PROPOSAL_STATUS_STYLES[proposal.status]}`}>
+          {proposal.status}
+        </span>
+      )}
+    </div>
+  );
+}
+
+// Per-day "Suggest a change" box, rendered under that day's comment thread.
+function DayProposalBox({
+  day,
   role,
   proposals,
-  proposalInput,
-  setProposalInput,
-  submittingProposal,
+  submitting,
   onSubmit,
   onReview,
   actionId,
-  userId,
+}: {
+  day: number;
+  role: 'owner' | 'collaborator' | null;
+  proposals: TripProposal[];
+  submitting: boolean;
+  onSubmit: (day: number, prompt: string) => Promise<boolean>;
+  onReview: (proposalId: string, action: 'accept' | 'reject') => void;
+  actionId: string | null;
+}) {
+  const [input, setInput] = useState('');
+  const canSuggest = role === 'owner' || role === 'collaborator';
+  const canReview = role === 'owner';
+
+  if (!canSuggest) return null;
+
+  const submit = async () => {
+    if (!input.trim() || submitting) return;
+    if (await onSubmit(day, input)) setInput('');
+  };
+
+  return (
+    <div className="mt-3 pt-3 border-t border-gray-100 dark:border-gray-700/50 space-y-2">
+      <div className="flex items-center gap-1.5 text-[12px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+        <Sparkles size={12} className="text-blue-600" /> Suggest a change
+      </div>
+      <div className="flex items-stretch gap-2">
+        <input
+          type="text"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && submit()}
+          placeholder={`Change something on Day ${day}...`}
+          disabled={submitting}
+          className="flex-1 min-w-0 text-[13px] border border-gray-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-blue-400 disabled:opacity-60"
+        />
+        <button
+          onClick={submit}
+          disabled={submitting || !input.trim()}
+          className="flex-shrink-0 px-3 py-1.5 text-[13px] font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1.5"
+        >
+          {submitting ? <span className="animate-spin">⟳</span> : <Sparkles size={13} />}
+          Suggest
+        </button>
+      </div>
+      {proposals.length > 0 && (
+        <div className="space-y-2 pt-1">
+          {proposals.map((proposal) => (
+            <ProposalCard
+              key={proposal.id}
+              proposal={proposal}
+              canReview={canReview}
+              actionId={actionId}
+              onReview={onReview}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Suggestions whose patch doesn't land on a day that's still in the itinerary.
+function UnassignedProposals({
+  role,
+  proposals,
+  onReview,
+  actionId,
 }: {
   role: 'owner' | 'collaborator' | null;
   proposals: TripProposal[];
-  proposalInput: string;
-  setProposalInput: (value: string) => void;
-  submittingProposal: boolean;
-  onSubmit: () => void;
   onReview: (proposalId: string, action: 'accept' | 'reject') => void;
   actionId: string | null;
-  userId?: string;
 }) {
-  const canSuggest = role === 'collaborator' || role === 'owner';
-  const canReview = role === 'owner';
-  const pending = proposals.filter((p) => p.status === 'pending');
-  const myProposals = proposals.filter((p) => p.proposedByUserId === userId);
-
+  if (proposals.length === 0 || role === null) return null;
   return (
-    <div className="border-t border-gray-200 dark:border-gray-700/50 pt-5 space-y-4">
-      {canSuggest && (
-        <div className="space-y-2">
-          <div className="flex items-center gap-2 text-[13px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
-            <Sparkles size={14} className="text-blue-600" /> Suggest a Change
-          </div>
-          <p className="text-[12px] text-gray-400 dark:text-gray-500">
-            {canReview
-              ? 'Describe a change and preview the AI patch before applying it.'
-              : 'Describe the change you want. The trip owner will review it before it is applied.'}
-          </p>
-          <div className="flex items-stretch gap-2">
-            <input
-              type="text"
-              value={proposalInput}
-              onChange={(e) => setProposalInput(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && onSubmit()}
-              placeholder="e.g. 'Swap Day 2 lunch for a vegan spot'"
-              disabled={submittingProposal}
-              className="flex-1 min-w-0 text-sm border border-gray-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-400 disabled:opacity-60"
-            />
-            <button
-              onClick={onSubmit}
-              disabled={submittingProposal || !proposalInput.trim()}
-              className="flex-shrink-0 px-4 text-sm font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-1.5"
-            >
-              {submittingProposal ? (
-                <><span className="animate-spin">⟳</span> Generating…</>
-              ) : (
-                <><Sparkles size={14} /> Suggest</>
-              )}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {!canSuggest && (
-        <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/40 p-4 text-sm text-gray-500 dark:text-gray-400 text-center">
-          Sign in to suggest or review itinerary changes.
-        </div>
-      )}
-
-      {canReview && pending.length > 0 && (
-        <div className="space-y-2">
-          <div className="flex items-center gap-2 text-[13px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
-            <UserCog size={14} /> Review Suggestions ({pending.length})
-          </div>
-          {pending.map((proposal) => (
-            <div key={proposal.id} className="border border-gray-200 dark:border-gray-700 rounded-xl p-3 bg-white dark:bg-gray-800 space-y-2">
-              <div className="text-sm text-gray-900 dark:text-gray-100">"{proposal.suggestedPrompt}"</div>
-              <div className="text-[12px] text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-900/40 rounded-lg p-2">
-                <span className="font-medium text-gray-600 dark:text-gray-300">AI patch preview:</span> {formatPatchPreview(proposal.patchData)}
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => onReview(proposal.id, 'accept')}
-                  disabled={actionId === proposal.id}
-                  className="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 text-[13px] font-medium rounded-lg bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300 hover:bg-green-200 dark:hover:bg-green-900/50 disabled:opacity-60"
-                >
-                  {actionId === proposal.id ? <span className="animate-spin">⟳</span> : <CheckSquare size={13} />}
-                  Accept
-                </button>
-                <button
-                  onClick={() => onReview(proposal.id, 'reject')}
-                  disabled={actionId === proposal.id}
-                  className="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 text-[13px] font-medium rounded-lg bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 hover:bg-red-200 dark:hover:bg-red-900/50 disabled:opacity-60"
-                >
-                  {actionId === proposal.id ? <span className="animate-spin">⟳</span> : <X size={13} />}
-                  Reject
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {role === 'collaborator' && myProposals.length > 0 && (
-        <div className="space-y-2">
-          <div className="text-[13px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
-            My Pending Suggestions
-          </div>
-          {myProposals.map((proposal) => (
-            <div key={proposal.id} className="border border-gray-200 dark:border-gray-700 rounded-xl p-3 bg-white dark:bg-gray-800">
-              <div className="text-sm text-gray-900 dark:text-gray-100">"{proposal.suggestedPrompt}"</div>
-              <div className="mt-1 text-[12px] text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-900/40 rounded-lg p-2">
-                {formatPatchPreview(proposal.patchData)}
-              </div>
-              <div className="mt-2 text-[12px] inline-flex items-center px-2 py-0.5 rounded-full bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300">
-                {proposal.status}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {role === 'owner' && proposals.length === 0 && (
-        <div className="text-[13px] text-gray-400 dark:text-gray-500">
-          No suggestions yet. Collaborators can propose changes here.
-        </div>
-      )}
-
-      {role === 'collaborator' && myProposals.length === 0 && (
-        <div className="text-[13px] text-gray-400 dark:text-gray-500">
-          You haven&apos;t submitted any suggestions yet.
-        </div>
-      )}
+    <div className="border-t border-gray-200 dark:border-gray-700/50 pt-4 space-y-2">
+      <div className="flex items-center gap-2 text-[13px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+        <UserCog size={14} /> Other suggestions
+      </div>
+      {proposals.map((proposal) => (
+        <ProposalCard
+          key={proposal.id}
+          proposal={proposal}
+          canReview={role === 'owner'}
+          actionId={actionId}
+          onReview={onReview}
+        />
+      ))}
     </div>
   );
 }
@@ -1160,13 +1225,11 @@ function ProposalsSection({
 // --- SavedTripCard ---
 
 function SavedTripCard({ trip, onUpdate, onDelete, isSignedIn }: { trip: SavedTrip; onUpdate: (trip: SavedTrip) => void; onDelete?: () => void; isSignedIn: boolean }) {
-  const { user } = useUser();
   const [activeTab, setActiveTab] = useState<'itinerary' | 'weather' | 'routes' | 'flights' | 'packing' | 'todos' | 'notes'>('itinerary');
   const [todoText, setTodoText] = useState('');
   const [proposals, setProposals] = useState<TripProposal[]>([]);
   const [proposalRole, setProposalRole] = useState<'owner' | 'collaborator' | null>(null);
-  const [proposalInput, setProposalInput] = useState('');
-  const [submittingProposal, setSubmittingProposal] = useState(false);
+  const [submittingDay, setSubmittingDay] = useState<number | null>(null);
   const [proposalActionId, setProposalActionId] = useState<string | null>(null);
 
   // Load collaboration role and pending proposals for this trip.
@@ -1181,22 +1244,25 @@ function SavedTripCard({ trip, onUpdate, onDelete, isSignedIn }: { trip: SavedTr
       .catch(() => {});
   }, [trip.id, isSignedIn]);
 
-  const submitProposal = async () => {
-    if (!proposalInput.trim() || submittingProposal) return;
-    setSubmittingProposal(true);
+  // day is passed so the AI targets that day; the stored prompt stays as typed.
+  const submitProposal = async (day: number, prompt: string): Promise<boolean> => {
+    if (!prompt.trim() || submittingDay !== null) return false;
+    setSubmittingDay(day);
     try {
       const res = await fetch(`/api/saved-trips/${trip.id}/proposals`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: proposalInput.trim() }),
+        body: JSON.stringify({ prompt: prompt.trim(), dayIndex: day }),
       });
       const data = await res.json();
       if (data.proposal) {
-        setProposals((prev) => [data.proposal, ...prev]);
-        setProposalInput('');
+        setProposals((prev) => [...prev, data.proposal]);
+        setSubmittingDay(null);
+        return true;
       }
     } catch { /* ignore */ }
-    setSubmittingProposal(false);
+    setSubmittingDay(null);
+    return false;
   };
 
   const reviewProposal = async (proposalId: string, action: 'accept' | 'reject') => {
@@ -1310,20 +1376,16 @@ function SavedTripCard({ trip, onUpdate, onDelete, isSignedIn }: { trip: SavedTr
 
       <div className="p-3 md:p-4">
         {activeTab === 'itinerary' && (
-          <div className="space-y-6">
-            <ItineraryTab trip={trip} onUpdate={onUpdate} />
-            <ProposalsSection
-              role={proposalRole}
-              proposals={proposals}
-              proposalInput={proposalInput}
-              setProposalInput={setProposalInput}
-              submittingProposal={submittingProposal}
-              onSubmit={submitProposal}
-              onReview={reviewProposal}
-              actionId={proposalActionId}
-              userId={user?.id}
-            />
-          </div>
+          <ItineraryTab
+            trip={trip}
+            onUpdate={onUpdate}
+            proposalRole={proposalRole}
+            proposals={proposals}
+            submittingDay={submittingDay}
+            onSubmitProposal={submitProposal}
+            onReviewProposal={reviewProposal}
+            proposalActionId={proposalActionId}
+          />
         )}
 
         {activeTab === 'weather' && (

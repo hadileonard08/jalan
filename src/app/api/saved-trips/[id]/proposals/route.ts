@@ -74,10 +74,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
     const tripId = params.id;
     const body = await req.json().catch(() => ({}));
-    const { prompt } = body;
+    const { prompt, dayIndex } = body;
     if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
       return NextResponse.json({ error: 'prompt is required' }, { status: 400 });
     }
+    // Suggestions raised from a specific day panel carry that day so the AI
+    // targets it, while the stored prompt stays exactly what the user typed.
+    const day = Number.isInteger(dayIndex) && dayIndex > 0 ? (dayIndex as number) : null;
 
     // Load the trip and verify the user can collaborate on it.
     const [trip] = await db.select().from(savedTrips).where(eq(savedTrips.id, tripId)).limit(1);
@@ -122,7 +125,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const patch = await generateItineraryPatch(
       existingItinerary,
       trip.destination || 'the destination',
-      prompt.trim(),
+      day ? `Day ${day}: ${prompt.trim()}` : prompt.trim(),
     );
 
     const [proposal] = await db
