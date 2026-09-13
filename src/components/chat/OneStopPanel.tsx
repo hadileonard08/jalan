@@ -1260,10 +1260,18 @@ interface TripMember {
   role: TripRole;
   isCreator: boolean;
   joinedAt: string;
+  name?: string | null;
+  email?: string | null;
+  imageUrl?: string | null;
 }
 
 function shortUserId(userId: string) {
   return userId.length > 14 ? `${userId.slice(0, 8)}…${userId.slice(-4)}` : userId;
+}
+
+// Prefer the Clerk name, then email, then a shortened ID as a last resort.
+function memberLabel(member: TripMember) {
+  return member.name || member.email || shortUserId(member.userId);
 }
 
 function TripSharingModal({ trip, onClose }: { trip: SavedTrip; onClose: () => void }) {
@@ -1390,17 +1398,29 @@ function TripSharingModal({ trip, onClose }: { trip: SavedTrip; onClose: () => v
           </div>
           {members.map((member) => (
             <div key={member.userId} className="flex items-center gap-2">
-              <span className="flex-1 min-w-0 truncate text-[13px] text-gray-700 dark:text-gray-300 font-mono">
-                {shortUserId(member.userId)}
-                {member.userId === user?.id && <span className="font-sans text-gray-400"> (you)</span>}
-              </span>
-              <span className={`text-[11px] px-2 py-0.5 rounded-full ${ROLE_BADGE_STYLES[member.role]}`}>
+              {member.imageUrl ? (
+                <img src={member.imageUrl} alt="" className="w-6 h-6 rounded-full flex-shrink-0 object-cover" />
+              ) : (
+                <div className="w-6 h-6 rounded-full flex-shrink-0 bg-gray-200 dark:bg-gray-700 flex items-center justify-center text-[10px] font-semibold text-gray-500 dark:text-gray-400">
+                  {memberLabel(member).charAt(0).toUpperCase()}
+                </div>
+              )}
+              <div className="flex-1 min-w-0">
+                <div className="text-[13px] text-gray-700 dark:text-gray-300 truncate">
+                  {memberLabel(member)}
+                  {member.userId === user?.id && <span className="text-gray-400"> (you)</span>}
+                </div>
+                {member.name && member.email && (
+                  <div className="text-[11px] text-gray-400 dark:text-gray-500 truncate">{member.email}</div>
+                )}
+              </div>
+              <span className={`text-[11px] px-2 py-0.5 rounded-full flex-shrink-0 ${ROLE_BADGE_STYLES[member.role]}`}>
                 {ROLE_LABELS[member.role]}
               </span>
               {!member.isCreator && (
                 <button
                   onClick={() => removeMember(member.userId)}
-                  className="text-gray-400 hover:text-red-600 p-1"
+                  className="text-gray-400 hover:text-red-600 p-1 flex-shrink-0"
                   title="Remove from trip"
                 >
                   <Trash2 size={13} />

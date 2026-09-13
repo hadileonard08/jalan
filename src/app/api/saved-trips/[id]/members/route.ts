@@ -3,6 +3,7 @@ import { auth } from '@clerk/nextjs/server';
 import { db } from '../../../../../db';
 import { tripCollaborators } from '../../../../../db/schema';
 import { getTripAccess } from '../../../../../lib/trip-access';
+import { resolveClerkUsers } from '../../../../../lib/clerk-users';
 import { asc, eq } from 'drizzle-orm';
 
 export const dynamic = 'force-dynamic';
@@ -35,7 +36,17 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
         })),
     ];
 
-    return NextResponse.json({ members });
+    // Attach real names/avatars from Clerk so the UI doesn't show raw IDs.
+    const profiles = await resolveClerkUsers(members.map((m) => m.userId));
+
+    return NextResponse.json({
+      members: members.map((member) => ({
+        ...member,
+        name: profiles[member.userId]?.name ?? null,
+        email: profiles[member.userId]?.email ?? null,
+        imageUrl: profiles[member.userId]?.imageUrl ?? null,
+      })),
+    });
   } catch (error) {
     console.error('Members GET error:', error);
     return NextResponse.json({ error: 'Failed to load members' }, { status: 500 });
