@@ -155,6 +155,13 @@ export interface DayFeedback {
   comments: DayComment[];
 }
 
+// Timestamped note added from the One Stop Notes tab.
+export interface NoteEntry {
+  id: string;
+  text: string;
+  createdAt: string;
+}
+
 // Live destination forecast shown in the One Stop Weather tab.
 export interface WeatherSnapshotDay {
   date: string;              // YYYY-MM-DD
@@ -210,6 +217,8 @@ export interface SavedTrip {
   weatherUpdatedAt?: string | null;
   todos: { id: string; text: string; done: boolean }[];
   notes: string;
+  // Timestamped notes added from the Notes tab.
+  noteEntries: NoteEntry[];
   // Per-stop feedback keyed by landmark name (lowercased).
   feedback: Record<string, StopFeedback>;
   // Per-day feedback keyed by day index (1-based).

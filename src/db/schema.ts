@@ -102,7 +102,8 @@ export const savedTrips = pgTable('saved_trips', {
   weatherSnapshot: text('weather_snapshot'), // JSON: live forecast for the destination
   weatherUpdatedAt: timestamp('weather_updated_at'),
   todos: text('todos').notNull().default('[]'), // JSON: [{ id, text, done }]
-  notes: text('notes').notNull().default(''),
+  notes: text('notes').notNull().default(''), // freeform trip notes
+  noteEntries: text('note_entries').notNull().default('[]'), // JSON: [{ id, text, createdAt }]
   feedback: text('feedback').notNull().default('{}'), // JSON: Record<stopName, StopFeedback>
   dayFeedback: text('day_feedback').notNull().default('{}'), // JSON: Record<dayIndex, DayFeedback>
   flightInfo: text('flight_info').notNull().default('[]'), // JSON: ManualFlightEntry[]

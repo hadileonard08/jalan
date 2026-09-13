@@ -116,6 +116,7 @@ export async function PATCH(
         payload: JSON.parse(updatedTrip.payload),
         todos: JSON.parse(updatedTrip.todos),
         notes: updatedTrip.notes,
+        noteEntries: JSON.parse(updatedTrip.noteEntries || '[]'),
         feedback: JSON.parse(updatedTrip.feedback || '{}'),
         dayFeedback: JSON.parse(updatedTrip.dayFeedback || '{}'),
         flightInfo: JSON.parse(updatedTrip.flightInfo || '[]'),

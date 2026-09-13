@@ -767,6 +767,7 @@ export default function ChatPage() {
       weatherUpdatedAt: null,
       todos: [],
       notes: '',
+      noteEntries: [],
       feedback: {},
       dayFeedback: {},
       flightInfo: [],

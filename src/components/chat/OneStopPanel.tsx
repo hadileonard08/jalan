@@ -11,7 +11,7 @@ import {
 import { useUser } from '@/components/AuthProvider';
 import type {
   SavedTrip, ChatPayload, StopFeedback, StopComment, DayFeedback, DayComment,
-  ManualFlightEntry, UploadedDocument, WeatherSnapshot, TripProposal,
+  ManualFlightEntry, UploadedDocument, WeatherSnapshot, TripProposal, NoteEntry,
 } from '@/lib/chat-state';
 import { stripFollowUpQuestions } from '@/lib/itinerary-cleanup';
 import type { DayTransport } from '@/agents/transport';
@@ -1481,6 +1481,7 @@ function TripSharingModal({ trip, onClose }: { trip: SavedTrip; onClose: () => v
 function SavedTripCard({ trip, onUpdate, onDelete, onLeave, isSignedIn, isOpen }: { trip: SavedTrip; onUpdate: (trip: SavedTrip) => void; onDelete?: () => void; onLeave?: () => void; isSignedIn: boolean; isOpen: boolean }) {
   const [activeTab, setActiveTab] = useState<'itinerary' | 'weather' | 'routes' | 'flights' | 'packing' | 'todos' | 'notes'>('itinerary');
   const [todoText, setTodoText] = useState('');
+  const [noteText, setNoteText] = useState('');
   const [proposals, setProposals] = useState<TripProposal[]>([]);
   const [proposalRole, setProposalRole] = useState<TripRole | null>(null);
   const [submittingDay, setSubmittingDay] = useState<number | null>(null);
@@ -1584,6 +1585,21 @@ function SavedTripCard({ trip, onUpdate, onDelete, onLeave, isSignedIn, isOpen }
 
   const updateNotes = (notes: string) => {
     onUpdate({ ...trip, notes });
+  };
+
+  const addNote = () => {
+    if (!noteText.trim()) return;
+    const entry: NoteEntry = {
+      id: crypto.randomUUID(),
+      text: noteText.trim(),
+      createdAt: new Date().toISOString(),
+    };
+    onUpdate({ ...trip, noteEntries: [...(trip.noteEntries || []), entry] });
+    setNoteText('');
+  };
+
+  const deleteNote = (id: string) => {
+    onUpdate({ ...trip, noteEntries: (trip.noteEntries || []).filter((n) => n.id !== id) });
   };
 
   const copyToClipboard = () => {
@@ -1807,16 +1823,65 @@ function SavedTripCard({ trip, onUpdate, onDelete, onLeave, isSignedIn, isOpen }
         )}
 
         {activeTab === 'notes' && (
-          <div className="space-y-2">
-            <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
-              <StickyNote size={16} /> Notes
+          <div className="space-y-4">
+            <div className="flex items-stretch gap-2">
+              <input
+                type="text"
+                value={noteText}
+                onChange={(e) => setNoteText(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && addNote()}
+                placeholder="Add a note (e.g. 'Book the ferry in advance')..."
+                className="flex-1 min-w-0 text-sm border border-gray-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-400"
+              />
+              <button
+                onClick={addNote}
+                disabled={!noteText.trim()}
+                className="flex-shrink-0 px-4 text-sm font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1.5"
+              >
+                <Plus size={15} /> Add note
+              </button>
             </div>
-            <textarea
-              value={trip.notes}
-              onChange={(e) => updateNotes(e.target.value)}
-              placeholder="Write your notes here..."
-              className="w-full h-32 text-sm border border-gray-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 rounded-lg p-3 focus:outline-none focus:border-blue-400 resize-none"
-            />
+
+            {(trip.noteEntries || []).length === 0 ? (
+              <div className="text-sm text-gray-400 dark:text-gray-500">No notes yet.</div>
+            ) : (
+              <div className="space-y-2">
+                {(trip.noteEntries || []).map((note) => (
+                  <div
+                    key={note.id}
+                    className="flex items-start gap-2 group rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2"
+                  >
+                    <StickyNote size={14} className="text-amber-500 flex-shrink-0 mt-0.5" />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap break-words">{note.text}</div>
+                      <div className="text-[12px] text-gray-400 dark:text-gray-500 mt-0.5">{formatDateTime(note.createdAt)}</div>
+                    </div>
+                    <button
+                      onClick={() => deleteNote(note.id)}
+                      className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-600 p-1 flex-shrink-0"
+                      title="Delete note"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Older trips stored a single freeform notes field — keep it editable. */}
+            {trip.notes && (
+              <div className="space-y-2 border-t border-gray-100 dark:border-gray-700/50 pt-3">
+                <div className="flex items-center gap-2 text-[13px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+                  <StickyNote size={13} /> Trip notes
+                </div>
+                <textarea
+                  value={trip.notes}
+                  onChange={(e) => updateNotes(e.target.value)}
+                  placeholder="Write your notes here..."
+                  className="w-full h-32 text-sm border border-gray-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 rounded-lg p-3 focus:outline-none focus:border-blue-400 resize-none"
+                />
+              </div>
+            )}
           </div>
         )}
 
@@ -1846,7 +1911,10 @@ function buildTripSummary(trip: SavedTrip): string {
     summary += `Routes:\n${p.routeLinks.map((r) => `- Day ${r.day}: ${r.url}`).join('\n')}\n\n`;
   }
   if (p.packingTips) summary += `Packing:\n${p.packingTips}\n\n`;
-  if (trip.notes) summary += `Notes:\n${trip.notes}\n\n`;
+  if (trip.noteEntries && trip.noteEntries.length > 0) {
+    summary += `Notes:\n${trip.noteEntries.map((n) => `- ${n.text}`).join('\n')}\n\n`;
+  }
+  if (trip.notes) summary += `Trip notes:\n${trip.notes}\n\n`;
   if (trip.todos.length > 0) summary += `To-dos:\n${trip.todos.map((t) => `- [${t.done ? 'x' : ' '}] ${t.text}`).join('\n')}\n`;
   if (trip.flightInfo && trip.flightInfo.length > 0) {
     summary += `\nBookings:\n${trip.flightInfo.map((e) => `- ${e.label} (${e.airlineOrProvider}) · ${e.confirmationCode || 'no ref'}`).join('\n')}\n`;
@@ -1897,6 +1965,7 @@ export default function OneStopPanel({ isOpen, onClose, savedTrips, setSavedTrip
         body: JSON.stringify({
           todos: updated.todos,
           notes: updated.notes,
+          noteEntries: updated.noteEntries || [],
           feedback: updated.feedback || {},
           dayFeedback: updated.dayFeedback || {},
           flightInfo: updated.flightInfo || [],
