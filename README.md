@@ -110,7 +110,8 @@ flowchart TD
     %% row, after which the router diverts to Clarify Limit.
     clarifyAsk --> clarify
     clarify --> extract
-    userReply -.->|"resume value"| clarify
+    clarify -.->|"question shown · run suspends"| userReply
+    userReply -.->|"reply resumes the node"| clarify
 
     %% Main pipeline — Gather clears the clarification streak
     gather --> generate

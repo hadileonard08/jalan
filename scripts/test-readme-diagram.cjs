@@ -54,7 +54,8 @@ const puppeteer = require('puppeteer');
     hasUserReplyBox: (document.querySelector('#out svg')?.textContent || '').includes('Language State Machine'),
     hasClarifyAsk: (document.querySelector('#out svg')?.textContent || '').includes('Clarify Ask'),
     hasInterruptNode: (document.querySelector('#out svg')?.textContent || '').includes('suspends the run'),
-    hasResumeEdge: (document.querySelector('#out svg')?.textContent || '').includes('resume value'),
+    hasQuestionOutEdge: (document.querySelector('#out svg')?.textContent || '').includes('question shown'),
+    hasResumeEdge: (document.querySelector('#out svg')?.textContent || '').includes('reply resumes the node'),
   }));
 
   console.log(JSON.stringify(result, null, 2));
