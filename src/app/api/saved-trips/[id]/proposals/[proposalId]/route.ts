@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@clerk/nextjs/server';
 import { db } from '../../../../../../db';
-import { savedTrips, tripCollaborators, tripProposals } from '../../../../../../db/schema';
+import { savedTrips, tripProposals } from '../../../../../../db/schema';
 import { mergeItineraryPatch } from '../../../../../../agents/refine-itinerary';
 import type { ItineraryPatch } from '../../../../../../lib/chat-state';
+import { getTripAccess, isOwnerLevel } from '../../../../../../lib/trip-access';
 import { eq, and } from 'drizzle-orm';
 
 export const dynamic = 'force-dynamic';
@@ -28,31 +29,13 @@ export async function PATCH(
       return NextResponse.json({ error: 'action must be "accept" or "reject"' }, { status: 400 });
     }
 
-    // Verify ownership: either the saved trip belongs to this user, or they hold
-    // an explicit owner role in trip_collaborators.
-    const [trip] = await db.select().from(savedTrips).where(eq(savedTrips.id, tripId)).limit(1);
+    // Only the Master Planner or a Disciple may review proposals.
+    const { trip, role } = await getTripAccess(tripId, userId);
     if (!trip) {
       return NextResponse.json({ error: 'Trip not found' }, { status: 404 });
     }
-
-    const isSavedOwner = trip.userId === userId;
-    const isExplicitOwner = isSavedOwner
-      ? true
-      : await db
-          .select()
-          .from(tripCollaborators)
-          .where(
-            and(
-              eq(tripCollaborators.tripId, tripId),
-              eq(tripCollaborators.userId, userId),
-              eq(tripCollaborators.role, 'owner')
-            )
-          )
-          .limit(1)
-          .then((rows) => rows.length > 0);
-
-    if (!isSavedOwner && !isExplicitOwner) {
-      return NextResponse.json({ error: 'Only the owner can review proposals' }, { status: 403 });
+    if (!isOwnerLevel(role)) {
+      return NextResponse.json({ error: 'Only the Master Planner can review proposals' }, { status: 403 });
     }
 
     // Load the proposal.

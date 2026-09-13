@@ -6,8 +6,9 @@ import {
   X, Plus, Trash2, CheckSquare, Square, Plane, Clipboard, StickyNote,
   MapPin, Calendar, Map, Bell, ThumbsUp, ThumbsDown, MessageSquare,
   FileText, Upload, Download, Hotel, Train, Car, ChevronDown, ChevronUp,
-  AlertTriangle, Sparkles, UserCog,
+  AlertTriangle, Sparkles, UserCog, UserPlus, Link2, Check, LogOut,
 } from 'lucide-react';
+import { useUser } from '@/components/AuthProvider';
 import type {
   SavedTrip, ChatPayload, StopFeedback, StopComment, DayFeedback, DayComment,
   ManualFlightEntry, UploadedDocument, WeatherSnapshot, TripProposal,
@@ -1252,15 +1253,177 @@ function UnassignedProposals({
   );
 }
 
+// --- Sharing / invites ---
+
+interface TripMember {
+  userId: string;
+  role: TripRole;
+  isCreator: boolean;
+  joinedAt: string;
+}
+
+function shortUserId(userId: string) {
+  return userId.length > 14 ? `${userId.slice(0, 8)}…${userId.slice(-4)}` : userId;
+}
+
+function TripSharingModal({ trip, onClose }: { trip: SavedTrip; onClose: () => void }) {
+  const { user } = useUser();
+  const [inviteRole, setInviteRole] = useState<'collaborator' | 'owner'>('collaborator');
+  const [inviteUrl, setInviteUrl] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [members, setMembers] = useState<TripMember[]>([]);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    fetch(`/api/saved-trips/${trip.id}/members`)
+      .then((r) => r.json())
+      .then((data) => { if (Array.isArray(data.members)) setMembers(data.members); })
+      .catch(() => {});
+  }, [trip.id]);
+
+  const createInvite = async () => {
+    setCreating(true);
+    setError('');
+    try {
+      const res = await fetch(`/api/saved-trips/${trip.id}/invites`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role: inviteRole }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to create invite');
+      setInviteUrl(`${window.location.origin}${data.invite.url}`);
+    } catch (err: any) {
+      setError(err.message || 'Failed to create invite');
+    }
+    setCreating(false);
+  };
+
+  const copyInvite = () => {
+    navigator.clipboard.writeText(inviteUrl).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }).catch(() => {});
+  };
+
+  const removeMember = async (userId: string) => {
+    setMembers((prev) => prev.filter((m) => m.userId !== userId));
+    await fetch(`/api/saved-trips/${trip.id}/members/${encodeURIComponent(userId)}`, { method: 'DELETE' })
+      .catch(() => {});
+  };
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
+      <div className="relative w-full max-w-md max-h-[85vh] overflow-y-auto rounded-[20px] border border-black/[0.05] dark:border-white/[0.1] bg-white dark:bg-[#2c2c2e] shadow-[0_20px_70px_rgba(0,0,0,0.2)] p-5 space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 font-semibold text-gray-900 dark:text-gray-100">
+            <UserPlus size={18} className="text-blue-600" /> Invite to {trip.destination || 'trip'}
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 p-1">
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="space-y-2">
+          <div className="text-[13px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+            Invite as
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            {([
+              { value: 'collaborator', label: 'Follower', hint: 'Can suggest & comment' },
+              { value: 'owner', label: 'Master Planner Disciple', hint: 'Can also approve' },
+            ] as const).map((option) => (
+              <button
+                key={option.value}
+                onClick={() => { setInviteRole(option.value); setInviteUrl(''); }}
+                className={`text-left rounded-xl border p-3 transition-colors ${
+                  inviteRole === option.value
+                    ? 'border-blue-400 bg-blue-50 dark:bg-blue-900/20'
+                    : 'border-gray-200 dark:border-gray-700 hover:border-blue-300'
+                }`}
+              >
+                <div className="text-[13px] font-medium text-gray-900 dark:text-gray-100">{option.label}</div>
+                <div className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">{option.hint}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {inviteUrl ? (
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <input
+                readOnly
+                value={inviteUrl}
+                className="flex-1 min-w-0 text-[13px] border border-gray-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 rounded-lg px-2.5 py-2"
+              />
+              <button
+                onClick={copyInvite}
+                className="flex-shrink-0 px-3 py-2 text-[13px] font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-1.5"
+              >
+                {copied ? <Check size={14} /> : <Link2 size={14} />}
+                {copied ? 'Copied' : 'Copy'}
+              </button>
+            </div>
+            <p className="text-[12px] text-gray-500 dark:text-gray-400">
+              Anyone with this link joins as a {inviteRole === 'owner' ? 'Master Planner Disciple' : 'Follower'} after signing in. Links expire in 30 days.
+            </p>
+          </div>
+        ) : (
+          <button
+            onClick={createInvite}
+            disabled={creating}
+            className="w-full bg-blue-600 text-white text-sm font-medium px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-1.5"
+          >
+            {creating ? <span className="animate-spin">⟳</span> : <Link2 size={15} />}
+            {creating ? 'Creating link...' : 'Create invite link'}
+          </button>
+        )}
+
+        {error && <div className="text-[12px] text-red-600 dark:text-red-400">{error}</div>}
+
+        <div className="border-t border-gray-100 dark:border-gray-700/50 pt-3 space-y-2">
+          <div className="text-[13px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+            On this trip ({members.length})
+          </div>
+          {members.map((member) => (
+            <div key={member.userId} className="flex items-center gap-2">
+              <span className="flex-1 min-w-0 truncate text-[13px] text-gray-700 dark:text-gray-300 font-mono">
+                {shortUserId(member.userId)}
+                {member.userId === user?.id && <span className="font-sans text-gray-400"> (you)</span>}
+              </span>
+              <span className={`text-[11px] px-2 py-0.5 rounded-full ${ROLE_BADGE_STYLES[member.role]}`}>
+                {ROLE_LABELS[member.role]}
+              </span>
+              {!member.isCreator && (
+                <button
+                  onClick={() => removeMember(member.userId)}
+                  className="text-gray-400 hover:text-red-600 p-1"
+                  title="Remove from trip"
+                >
+                  <Trash2 size={13} />
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // --- SavedTripCard ---
 
-function SavedTripCard({ trip, onUpdate, onDelete, isSignedIn }: { trip: SavedTrip; onUpdate: (trip: SavedTrip) => void; onDelete?: () => void; isSignedIn: boolean }) {
+function SavedTripCard({ trip, onUpdate, onDelete, onLeave, isSignedIn }: { trip: SavedTrip; onUpdate: (trip: SavedTrip) => void; onDelete?: () => void; onLeave?: () => void; isSignedIn: boolean }) {
   const [activeTab, setActiveTab] = useState<'itinerary' | 'weather' | 'routes' | 'flights' | 'packing' | 'todos' | 'notes'>('itinerary');
   const [todoText, setTodoText] = useState('');
   const [proposals, setProposals] = useState<TripProposal[]>([]);
   const [proposalRole, setProposalRole] = useState<TripRole | null>(null);
   const [submittingDay, setSubmittingDay] = useState<number | null>(null);
   const [proposalActionId, setProposalActionId] = useState<string | null>(null);
+  const [sharingOpen, setSharingOpen] = useState(false);
 
   // Load collaboration role and pending proposals for this trip.
   useEffect(() => {
@@ -1394,14 +1557,33 @@ function SavedTripCard({ trip, onUpdate, onDelete, isSignedIn }: { trip: SavedTr
           >
             <Clipboard size={16} />
           </button>
-          {onDelete && (
+          {canReviewRole(proposalRole) && (
             <button
-              onClick={onDelete}
-              className="text-gray-400 dark:text-gray-500 hover:text-red-600 p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
-              title="Delete trip"
+              onClick={() => setSharingOpen(true)}
+              className="text-gray-400 dark:text-gray-500 hover:text-blue-600 p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+              title="Invite people to this trip"
             >
-              <Trash2 size={16} />
+              <UserPlus size={16} />
             </button>
+          )}
+          {proposalRole && proposalRole !== 'owner' && onLeave ? (
+            <button
+              onClick={onLeave}
+              className="text-gray-400 dark:text-gray-500 hover:text-red-600 p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+              title="Leave this trip"
+            >
+              <LogOut size={16} />
+            </button>
+          ) : (
+            onDelete && (
+              <button
+                onClick={onDelete}
+                className="text-gray-400 dark:text-gray-500 hover:text-red-600 p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                title="Delete trip"
+              >
+                <Trash2 size={16} />
+              </button>
+            )
           )}
         </div>
       </div>
@@ -1547,6 +1729,10 @@ function SavedTripCard({ trip, onUpdate, onDelete, isSignedIn }: { trip: SavedTr
         )}
 
       </div>
+
+      {sharingOpen && (
+        <TripSharingModal trip={trip} onClose={() => setSharingOpen(false)} />
+      )}
     </div>
   );
 }
@@ -1627,6 +1813,16 @@ export default function OneStopPanel({ isOpen, onClose, savedTrips, setSavedTrip
       fetch(`/api/saved-trips/${id}`, {
         method: 'DELETE',
       }).catch(() => { /* silent fail — local state is already updated */ });
+    }
+  };
+
+  // Leaving a shared trip only removes the membership row, not the trip itself.
+  const leaveTrip = (id: string) => {
+    setSavedTrips((prev) => prev.filter((t) => t.id !== id));
+    if (activeTripId === id) setActiveTripId(null);
+    if (isSignedIn) {
+      fetch(`/api/saved-trips/${id}/members/me`, { method: 'DELETE' })
+        .catch(() => { /* silent fail — local state is already updated */ });
     }
   };
 
@@ -1903,7 +2099,13 @@ export default function OneStopPanel({ isOpen, onClose, savedTrips, setSavedTrip
             /* --- Trips View (single trip) --- */
             <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8">
               <div className="mx-auto max-w-6xl">
-                <SavedTripCard isSignedIn={isSignedIn} trip={savedTrips[0]} onUpdate={updateTrip} onDelete={() => deleteTrip(savedTrips[0].id)} />
+                <SavedTripCard
+                  isSignedIn={isSignedIn}
+                  trip={savedTrips[0]}
+                  onUpdate={updateTrip}
+                  onDelete={() => deleteTrip(savedTrips[0].id)}
+                  onLeave={isSignedIn ? () => leaveTrip(savedTrips[0].id) : undefined}
+                />
               </div>
             </div>
           ) : (
@@ -1959,7 +2161,13 @@ export default function OneStopPanel({ isOpen, onClose, savedTrips, setSavedTrip
                 <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8">
                   <div className="mx-auto max-w-6xl">
                     {activeTrip ? (
-                      <SavedTripCard isSignedIn={isSignedIn} trip={activeTrip} onUpdate={updateTrip} onDelete={() => deleteTrip(activeTrip.id)} />
+                      <SavedTripCard
+                        isSignedIn={isSignedIn}
+                        trip={activeTrip}
+                        onUpdate={updateTrip}
+                        onDelete={() => deleteTrip(activeTrip.id)}
+                        onLeave={isSignedIn ? () => leaveTrip(activeTrip.id) : undefined}
+                      />
                     ) : (
                       <div className="text-center text-gray-400 dark:text-gray-500 py-16">Select a trip.</div>
                     )}

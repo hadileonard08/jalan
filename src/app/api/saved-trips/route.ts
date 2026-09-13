@@ -1,12 +1,34 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@clerk/nextjs/server';
 import { db } from '../../../db';
-import { savedTrips } from '../../../db/schema';
-import { eq, desc, and } from 'drizzle-orm';
+import { savedTrips, tripCollaborators } from '../../../db/schema';
+import { eq, desc, and, inArray } from 'drizzle-orm';
 
 export const dynamic = 'force-dynamic';
 
-// GET /api/saved-trips — list all saved trips for the current user.
+// Parse JSON fields for the client.
+function serializeTrip(t: typeof savedTrips.$inferSelect) {
+  return {
+    id: t.id,
+    conversationId: t.conversationId || '',
+    destination: t.destination,
+    dates: t.dates || 'Dates TBD',
+    weatherAlert: t.weatherAlert,
+    weatherSnapshot: t.weatherSnapshot ? JSON.parse(t.weatherSnapshot) : null,
+    weatherUpdatedAt: t.weatherUpdatedAt ? t.weatherUpdatedAt.toISOString() : null,
+    payload: JSON.parse(t.payload),
+    todos: JSON.parse(t.todos),
+    notes: t.notes,
+    feedback: JSON.parse(t.feedback || '{}'),
+    dayFeedback: JSON.parse(t.dayFeedback || '{}'),
+    flightInfo: JSON.parse(t.flightInfo || '[]'),
+    documents: JSON.parse(t.documents || '[]'),
+    savedAt: t.createdAt.toISOString(),
+  };
+}
+
+// GET /api/saved-trips — list the trips the user owns plus any they were
+// invited to as a Master Planner Disciple or Follower.
 export async function GET() {
   try {
     const userId = auth().userId;
@@ -14,32 +36,28 @@ export async function GET() {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
-    const trips = await db
+    const owned = await db
       .select()
       .from(savedTrips)
       .where(eq(savedTrips.userId, userId))
       .orderBy(desc(savedTrips.updatedAt));
 
-    // Parse JSON fields for the client.
-    const parsed = trips.map((t) => ({
-      id: t.id,
-      conversationId: t.conversationId || '',
-      destination: t.destination,
-      dates: t.dates || 'Dates TBD',
-      weatherAlert: t.weatherAlert,
-      weatherSnapshot: t.weatherSnapshot ? JSON.parse(t.weatherSnapshot) : null,
-      weatherUpdatedAt: t.weatherUpdatedAt ? t.weatherUpdatedAt.toISOString() : null,
-      payload: JSON.parse(t.payload),
-      todos: JSON.parse(t.todos),
-      notes: t.notes,
-      feedback: JSON.parse(t.feedback || '{}'),
-      dayFeedback: JSON.parse(t.dayFeedback || '{}'),
-      flightInfo: JSON.parse(t.flightInfo || '[]'),
-      documents: JSON.parse(t.documents || '[]'),
-      savedAt: t.createdAt.toISOString(),
-    }));
+    const memberships = await db
+      .select()
+      .from(tripCollaborators)
+      .where(eq(tripCollaborators.userId, userId));
 
-    return NextResponse.json({ trips: parsed });
+    const ownedIds = new Set(owned.map((t) => t.id));
+    const sharedIds = memberships.map((m) => m.tripId).filter((id) => !ownedIds.has(id));
+    const shared = sharedIds.length
+      ? await db.select().from(savedTrips).where(inArray(savedTrips.id, sharedIds))
+      : [];
+
+    const trips = [...owned, ...shared].sort(
+      (a, b) => b.updatedAt.getTime() - a.updatedAt.getTime()
+    );
+
+    return NextResponse.json({ trips: trips.map(serializeTrip) });
   } catch (error) {
     console.error('Saved trips GET error:', error);
     return NextResponse.json({ error: 'Failed to load saved trips' }, { status: 500 });

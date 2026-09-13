@@ -171,6 +171,21 @@ export const tripCollaborators = pgTable('trip_collaborators', {
   tripIdx: index('trip_collaborators_trip_id_idx').on(table.tripId),
 }));
 
+// Invite links that add a signed-in user to a saved trip as a Disciple
+// (owner-level) or a Follower (collaborator).
+export const tripInvites = pgTable('trip_invites', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tripId: uuid('trip_id').references(() => savedTrips.id, { onDelete: 'cascade' }).notNull(),
+  token: varchar('token', { length: 64 }).notNull().unique(),
+  role: collaboratorRoleEnum('role').notNull().default('collaborator'),
+  createdByUserId: varchar('created_by_user_id', { length: 255 }).notNull(),
+  expiresAt: timestamp('expires_at'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (table) => ({
+  tokenIdx: index('trip_invites_token_idx').on(table.token),
+  tripIdx: index('trip_invites_trip_id_idx').on(table.tripId),
+}));
+
 // Proposed AI-generated itinerary patches awaiting owner approval.
 export const proposalStatusEnum = pgEnum('proposal_status', ['pending', 'accepted', 'rejected']);
 

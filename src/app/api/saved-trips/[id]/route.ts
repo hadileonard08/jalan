@@ -2,17 +2,28 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@clerk/nextjs/server';
 import { db } from '../../../../db';
 import { savedTrips } from '../../../../db/schema';
+import { getTripAccess, isOwnerLevel } from '../../../../lib/trip-access';
 import { eq, and } from 'drizzle-orm';
 
 export const dynamic = 'force-dynamic';
 
 // PATCH /api/saved-trips/[id] — update a saved trip.
-// Body: { todos?, notes?, feedback?, flightInfo?, documents? }
+// Body: { todos?, notes?, feedback?, dayFeedback?, flightInfo?, documents? }
+// The itinerary itself is only changed through proposals, so owners,
+// Disciples, and Followers can all update the collaborative fields.
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const userId = auth().userId;
     if (!userId) {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+    }
+
+    const { trip, role } = await getTripAccess(params.id, userId);
+    if (!trip) {
+      return NextResponse.json({ error: 'Trip not found' }, { status: 404 });
+    }
+    if (!role) {
+      return NextResponse.json({ error: 'Not authorized' }, { status: 403 });
     }
 
     const body = await req.json();
@@ -30,7 +41,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     const [updated] = await db
       .update(savedTrips)
       .set(updates)
-      .where(and(eq(savedTrips.id, params.id), eq(savedTrips.userId, userId)))
+      .where(eq(savedTrips.id, params.id))
       .returning();
 
     if (!updated) {
@@ -62,7 +73,8 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   }
 }
 
-// DELETE /api/saved-trips/[id] — delete a saved trip.
+// DELETE /api/saved-trips/[id] — delete a saved trip (owner level only).
+// Followers and Disciples leave a trip through the members endpoint instead.
 export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const userId = auth().userId;
@@ -70,14 +82,18 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
-    const [deleted] = await db
-      .delete(savedTrips)
-      .where(and(eq(savedTrips.id, params.id), eq(savedTrips.userId, userId)))
-      .returning();
-
-    if (!deleted) {
+    const { trip, role } = await getTripAccess(params.id, userId);
+    if (!trip) {
       return NextResponse.json({ error: 'Trip not found' }, { status: 404 });
     }
+    if (!isOwnerLevel(role)) {
+      return NextResponse.json(
+        { error: 'Only the Master Planner can delete this trip. Leave the trip instead.' },
+        { status: 403 }
+      );
+    }
+
+    await db.delete(savedTrips).where(and(eq(savedTrips.id, params.id), eq(savedTrips.userId, trip.userId)));
 
     return NextResponse.json({ success: true });
   } catch (error) {

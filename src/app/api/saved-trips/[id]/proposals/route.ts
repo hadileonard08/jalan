@@ -3,6 +3,7 @@ import { auth } from '@clerk/nextjs/server';
 import { db } from '../../../../../db';
 import { savedTrips, tripCollaborators, tripProposals } from '../../../../../db/schema';
 import { generateItineraryPatch } from '../../../../../agents/refine-itinerary';
+import { getTripAccess } from '../../../../../lib/trip-access';
 import { eq, and, asc } from 'drizzle-orm';
 
 export const dynamic = 'force-dynamic';
@@ -29,22 +30,11 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     }
 
     const tripId = params.id;
-    const [trip] = await db.select().from(savedTrips).where(eq(savedTrips.id, tripId)).limit(1);
+    const { trip, role } = await getTripAccess(tripId, userId);
     if (!trip) {
       return NextResponse.json({ error: 'Trip not found' }, { status: 404 });
     }
-
-    const isOwner = trip.userId === userId;
-    const collaborator = isOwner
-      ? null
-      : await db
-          .select()
-          .from(tripCollaborators)
-          .where(and(eq(tripCollaborators.tripId, tripId), eq(tripCollaborators.userId, userId)))
-          .limit(1)
-          .then((rows) => rows[0] || null);
-
-    if (!isOwner && !collaborator) {
+    if (!role) {
       return NextResponse.json({ error: 'Not authorized' }, { status: 403 });
     }
 
@@ -54,14 +44,6 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
       .where(eq(tripProposals.tripId, tripId))
       .orderBy(asc(tripProposals.createdAt));
 
-    // The trip's creator is the Master Planner. Anyone else gets their role
-    // from trip_collaborators: 'owner' there is a co-planner (Disciple),
-    // anything else is a Follower.
-    const role: 'owner' | 'co-planner' | 'collaborator' = isOwner
-      ? 'owner'
-      : collaborator?.role === 'owner'
-        ? 'co-planner'
-        : 'collaborator';
     return NextResponse.json({ role, proposals: rows.map(serializeProposal) });
   } catch (error) {
     console.error('Proposals GET error:', error);
@@ -90,36 +72,12 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const day = Number.isInteger(dayIndex) && dayIndex > 0 ? (dayIndex as number) : null;
 
     // Load the trip and verify the user can collaborate on it.
-    const [trip] = await db.select().from(savedTrips).where(eq(savedTrips.id, tripId)).limit(1);
+    const { trip, role } = await getTripAccess(tripId, userId);
     if (!trip) {
       return NextResponse.json({ error: 'Trip not found' }, { status: 404 });
     }
-
-    const isOwner = trip.userId === userId;
-    const collaborator = isOwner
-      ? null
-      : await db
-          .select()
-          .from(tripCollaborators)
-          .where(and(eq(tripCollaborators.tripId, tripId), eq(tripCollaborators.userId, userId)))
-          .limit(1)
-          .then((rows) => rows[0] || null);
-
-    if (!isOwner && !collaborator) {
+    if (!role) {
       return NextResponse.json({ error: 'Not authorized to suggest changes on this trip' }, { status: 403 });
-    }
-
-    // Ensure the owner has a collaborators row for future explicit role checks.
-    if (isOwner) {
-      const existingOwner = await db
-        .select()
-        .from(tripCollaborators)
-        .where(eq(tripCollaborators.tripId, tripId))
-        .limit(1)
-        .then((rows) => rows[0] || null);
-      if (!existingOwner) {
-        await db.insert(tripCollaborators).values({ tripId, userId, role: 'owner' });
-      }
     }
 
     // Generate the patch from the current itinerary.
