@@ -2,13 +2,13 @@ import { db } from '../db';
 import { savedTrips, tripCollaborators } from '../db/schema';
 import { eq, and } from 'drizzle-orm';
 
-// The trip's creator is the Master Planner. A trip_collaborators row with
-// role 'owner' is a Master Planner Support (co-planner); anything else in
-// that table is a Follower (collaborator).
-export type TripRole = 'owner' | 'co-planner' | 'collaborator';
+// Two roles only: the trip's creator is the Master Planner, and everyone invited
+// to the trip is a Follower. Followers can suggest changes and comment, but only
+// the Master Planner can approve, invite, remove members, or delete the trip.
+export type TripRole = 'owner' | 'collaborator';
 
 export function isOwnerLevel(role: TripRole | null) {
-  return role === 'owner' || role === 'co-planner';
+  return role === 'owner';
 }
 
 export async function getTripAccess(tripId: string, userId: string) {
@@ -24,8 +24,8 @@ export async function getTripAccess(tripId: string, userId: string) {
     .limit(1);
 
   if (!member) return { trip, role: null as TripRole | null };
-  return {
-    trip,
-    role: (member.role === 'owner' ? 'co-planner' : 'collaborator') as TripRole,
-  };
+
+  // Any member row is a Follower. A legacy row stored as 'owner' no longer
+  // grants owner-level rights — the creator is the only Master Planner.
+  return { trip, role: 'collaborator' as TripRole };
 }

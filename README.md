@@ -2,7 +2,7 @@
 
 **Live app:** https://jalan-ai.vercel.app
 
-A conversational travel planning assistant that turns natural-language requests into full day-by-day itineraries with live weather, real points flight deals, transport routing, packing lists, daily Google Maps route links, deterministic safety checks, and a RAG Triad LLM-as-a-judge self-correction loop — all powered by LangGraph and a hybrid Gemini model configuration. Saved trips are **multiplayer**: invite friends as Followers or Master Planner Support, and let them propose AI-generated itinerary changes that only the Master Planner can approve.
+A conversational travel planning assistant that turns natural-language requests into full day-by-day itineraries with live weather, real points flight deals, transport routing, packing lists, daily Google Maps route links, deterministic safety checks, and a RAG Triad LLM-as-a-judge self-correction loop — all powered by LangGraph and a hybrid Gemini model configuration. Saved trips are **multiplayer**: invite friends as Followers, and let them propose AI-generated itinerary changes that only the Master Planner can approve.
 
 _"jalan" means "to walk" or "to travel" in Indonesian._
 
@@ -32,8 +32,8 @@ Users chat with **Jalan**, a friendly travel companion that:
 11. **Refines existing itineraries via Delta Updates** — when a user asks to modify a previous plan (e.g. "swap day 2 lunch for a vegan spot", "make it shorter", "I don't drink beer"), the Extract node detects that an itinerary already exists and classifies the request as a `refine` intent. The `Apply Refinements` node then produces a Zod-validated JSON patch and a deterministic merger applies it surgically to `currentItinerary`. Unpatched versions are preserved in `previousItineraries`, so old plans are never permanently lost.
 12. **Interactive daily route maps** — each day's route is rendered on an interactive Leaflet map (CARTO Voyager tiles) with numbered markers, walking/transit polylines, and auto-fit bounds. Airport/departure stops are always anchored as the final waypoint.
 13. **One Stop collaboration** — per-day thumbs up/down and comment threads alongside each day's itinerary, plus manual flight/hotel/train entries and PDF document uploads for each saved trip. On desktop, each day renders in a 2-column layout with the itinerary on the left and the scrollable comment/voting panel pinned to the right; on mobile, comments are collapsed by default to prevent vertical bloat.
-14. **Multiplayer AI collaboration with approval** — saved trips are shared with roles: the trip creator is the **Master Planner**, a co-planner is a **Master Planner Support**, and everyone else is a **Follower**. Followers can't edit the itinerary directly; they type a plain-English request under any day ("swap Day 2 lunch for a vegan spot") and the AI turns it into a JSON patch stored as a **pending proposal**. Master Planners and Support accept (patch merged deterministically into the saved itinerary), reject, or the suggester can edit & regenerate or withdraw their own. Accepted changes propagate to other collaborators without a page reload.
-15. **Trip invites** — Master Planners and Support mint 30-day invite links that add a signed-in friend as a Follower or Master Planner Support. The member list resolves real names, emails, and avatars through the Clerk Backend API, and non-owners get **Leave trip** instead of Delete.
+14. **Multiplayer AI collaboration with approval** — saved trips are shared with two roles: the trip creator is the **Master Planner** and everyone invited is a **Follower**. Followers can't edit the itinerary directly; they type a plain-English request under any day ("swap Day 2 lunch for a vegan spot") and the AI turns it into a JSON patch stored as a **pending proposal**. The Master Planner accepts (patch merged deterministically into the saved itinerary) or rejects; the suggester can edit Master Planners and Support accept (patch merged deterministically into the saved itinerary), reject, or the suggester can edit & regenerate or withdraw their own. regenerate or withdraw their own. Accepted changes propagate to other collaborators without a page reload.
+15. **Trip invites** — The Master Planner mints 30-day invite links that add a signed-in friend as a Follower. The member list resolves real names, emails, and avatars through the Clerk Backend API, and non-owners get **Leave trip** instead of Delete.
 16. **Live weather tab** — every saved trip stores a destination forecast refreshed by the daily weather cron, shown in a dedicated Weather tab (forecast for the trip dates when in range, current outlook otherwise), alongside the 48-hour departure rain/heat/wind alert banner.
 17. **Traveler Profile** — authenticated users can save global travel preferences (dietary restrictions, transport preference, airline alliance, general notes) that are injected into the LangGraph system prompt so every generated itinerary honors them.
 18. **Mobile-optimized One Stop** — full-page view on every screen size, with a native trip-selector dropdown, horizontally scrollable tabs with 44px touch targets, and no horizontal page scroll.
@@ -377,7 +377,7 @@ A sign-in-gated full-page view accessible from the left sidebar that lets users:
 - **Notes** — timestamped note entries with an **Add note** button, plus the legacy free-form notes field when a trip has one.
 - **Per-day collaboration** — thumbs up/down and a scrollable comment thread for every day, with the itinerary on the left and the collaboration panel pinned to the right.
 - **Suggest a change (AI proposals)** — under each day's comments, any collaborator can describe a change; the AI generates a JSON patch and stores it as a pending proposal. Owner-level roles get Accept/Reject plus a "waiting for approval" badge in the trip header that opens a review sheet; suggesters get Edit & regenerate and Withdraw on their own pending suggestions.
-- **Roles and invites** — Master Planner / Master Planner Support / Follower badges, invite links, member list with real names and avatars, and Leave trip for non-owners.
+- **Roles and invites** — a Master Planner / Follower badge, invite links, a member list with real names and avatars, and Leave trip for Followers.
 - **Flights & Docs** — manual flight/hotel/train/car entries with confirmation codes, plus PDF document uploads (e-tickets, vouchers) stored as base64 data URLs. A PDF can be attached to a booking at creation time so tickets and bookings stay together.
 - **Weather tab** — the destination forecast stored by the daily weather cron, with a "forecast for your trip" view when the dates are in range and the current outlook otherwise.
 - **Interactive route maps** — each day's route is rendered on a Leaflet map with CARTO Voyager tiles.
@@ -481,7 +481,7 @@ A sign-in-gated full-page view accessible from the left sidebar that lets users:
 - PostgreSQL persistence (signed-in) or localStorage (guests).
 
 ### Multiplayer AI collaboration
-- **Roles** — the trip creator is the Master Planner, a co-planner is a Master Planner Support, everyone else is a Follower. Enforced server-side, not just in the UI.
+- **Roles** — the trip creator is the Master Planner, everyone invited is a Follower. Enforced server-side, not just in the UI.
 - **Followers never edit the itinerary directly.** They submit a natural-language suggestion under a specific day; `generateItineraryPatch()` turns it into a Zod-validated JSON patch stored as `pending`.
 - **Approval merges deterministically** — accepting runs the same `mergeItineraryPatch()` reducer the refine flow uses, so only the targeted day changes. A patch that no longer matches anything returns 422 instead of silently marking itself accepted.
 - **Approval refreshes what described the old stop** — the day's hero image, its Google Maps link, its map waypoints/polyline, and the transport notes in the text are rebuilt for the edited days only, so an approved change can't leave a stale photo or route behind. Best-effort: a failing refresh never fails the approval.
@@ -512,7 +512,7 @@ A sign-in-gated full-page view accessible from the left sidebar that lets users:
 - `GET /api/saved-trips/[id]` — fetch a single trip; used by One Stop's 30s live-sync poll.
 - `PATCH /api/saved-trips/[id]` — update todos, notes, note entries, feedback, day feedback, flight info, documents. Allowed for owners, Support, and Followers (the itinerary itself only changes through approved proposals).
 - `DELETE /api/saved-trips/[id]` — delete a saved trip (owner level only; collaborators leave instead).
-- `GET /api/saved-trips/[id]/proposals` — list proposals for a trip plus the caller's role (`owner` / `co-planner` / `collaborator`).
+- `GET /api/saved-trips/[id]/proposals` — list proposals for a trip plus the caller's role (`owner` / `collaborator`).
 - `POST /api/saved-trips/[id]/proposals` — submit a suggestion; the AI generates a JSON patch stored as `pending` (never applied directly).
 - `PATCH /api/saved-trips/[id]/proposals/[proposalId]` — accept or reject (owner level only); accepting merges the patch and returns the updated trip.
 - `PUT /api/saved-trips/[id]/proposals/[proposalId]` — the suggester rewords their own pending suggestion; the patch is regenerated in place.
@@ -573,7 +573,7 @@ src/
     airline-booking.ts       # Airline-specific booking URL builder
     chat-state.ts            # Shared types + ItineraryPatchSchema (Zod) for Delta Updates
     chat-db.ts               # Conversation persistence
-    trip-access.ts           # Single source of truth for trip roles (owner / co-planner / collaborator)
+    trip-access.ts           # Single source of truth for trip roles (owner / collaborator)
     serialize-trip.ts        # Shared SavedTrip serializer for every saved-trip route
     clerk-users.ts           # Resolves member IDs to names/avatars via the Clerk Backend API (cached)
     itinerary-cleanup.ts     # Strips trailing AI follow-up questions from saved itineraries
@@ -625,6 +625,7 @@ scripts/
   test-date-window.ts        # Seasonal windows ("spring 2027"), when the date fallback may invent a date, and the deterministic itinerary-vs-requested date check
   test-refresh-enrichment.ts # Post-approval refresh: affected days, note de-duplication, stale hero-image detection
   test-review-concurrency.ts # Concurrent review guards, with real parallel calls against Postgres
+  test-trip-access.ts        # Roles: Master Planner vs Follower, incl. legacy owner-row downgrade
   backfill-enrichment.ts     # Repairs trips edited before the refresh existed (--dry-run supported)
   test-readme-diagram.cjs    # Renders the README Mermaid diagram in a browser to catch syntax errors
   setup-checkpointer.ts      # One-time creation of the LangGraph checkpoint tables
@@ -727,7 +728,7 @@ scripts/
 - Built a **share trip link feature** — generates public, read-only shareable URLs (stored server-side in PostgreSQL, never expire) that display the full itinerary with all payload sections and a section navigator.
 - Built a **Gemini-style sidebar** with New trip, One Stop, and recent conversations as nav items, plus a closable sign-in prompt for guests. Logo is clickable to navigate home.
 - Built a **One Stop panel** (sign-in-gated, full-page) with a trip selector (sidebar on desktop, dropdown on mobile), inline itinerary images, to-dos, timestamped notes, per-day collaboration (thumbs up/down + comment threads), AI change proposals, manual flight/hotel/train entries, PDF document uploads attachable to a booking, a cron-refreshed weather tab, interactive route maps, copy summary, and delete/leave — all organized in clean card headers. Includes **duplicate trip prevention** (server-side + client-side by conversationId or destination + dates).
-- Designed **multiplayer AI collaboration with an approval gate**: roles (Master Planner / Master Planner Support / Follower) enforced server-side in one shared access helper; Followers describe a change in plain English and the AI converts it into a stored JSON patch that only owner-level roles can accept. Accepting reuses the deterministic `mergeItineraryPatch()` reducer, a patch that no longer matches returns 422 instead of falsely succeeding, and accepted changes propagate to other collaborators' open panels within ~30 seconds.
+- Designed **multiplayer AI collaboration with an approval gate**: roles (Master Planner / Follower) enforced server-side in one shared access helper; Followers describe a change in plain English and the AI converts it into a stored JSON patch that only owner-level roles can accept. Accepting reuses the deterministic `mergeItineraryPatch()` reducer, a patch that no longer matches returns 422 instead of falsely succeeding, and accepted changes propagate to other collaborators' open panels within ~30 seconds.
 - Added **trip invites** — 30-day multi-use invite links with role selection, a member list resolving real names/emails/avatars through the Clerk Backend API (5-minute cache, 5s timeout, graceful fallback to the ID), and a **Leave trip** path for non-owners.
 - Added a **clarification loop guard** to the LangGraph flow: after 3 consecutive clarifying questions the router diverts to a fallback node that suggests concrete phrasing and resets the counter, and the streak is also derived from persisted history so it works even on a thread with no checkpoint yet.
 - Wired up **durable thread state** with a LangGraph **Postgres checkpointer** (`thread_id` = conversation id, invoked from Vercel serverless over Neon's pooled endpoint with `max: 1`). Because state then survives between turns, every per-run field is cleared at the top of `extractNode` — a test asserts all 26 state keys are consciously classified as reset or durable, so a stale `revisionCount`/`isApproved` can never make the Critic reject a fresh itinerary without retrying.

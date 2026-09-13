@@ -29,7 +29,7 @@ function serializeTrip(t: typeof savedTrips.$inferSelect) {
 }
 
 // GET /api/saved-trips — list the trips the user owns plus any they were
-// invited to as a Master Planner Support or Follower.
+// invited as a Follower.
 export async function GET() {
   try {
     const userId = auth().userId;

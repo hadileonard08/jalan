@@ -88,9 +88,7 @@ export default function InvitePage() {
                 You&apos;ll join as <span className="font-semibold">{info.invite.roleLabel}</span>
               </div>
               <p className="text-[12px] text-gray-500 dark:text-gray-400 mt-1">
-                {info.invite.role === 'owner'
-                  ? 'Master Planner Support can suggest changes and approve them.'
-                  : 'Followers can suggest changes and comment. The Master Planner approves them.'}
+                Followers can comment and suggest changes. The Master Planner approves them.
               </p>
             </div>
 

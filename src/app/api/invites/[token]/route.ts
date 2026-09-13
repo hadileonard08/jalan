@@ -6,8 +6,9 @@ import { and, eq } from 'drizzle-orm';
 
 export const dynamic = 'force-dynamic';
 
-function roleLabel(role: 'owner' | 'collaborator') {
-  return role === 'owner' ? 'Master Planner Support' : 'Follower';
+// Invites always add a Follower — the Master Planner is the trip's creator.
+function roleLabel(_role: 'owner' | 'collaborator') {
+  return 'Follower';
 }
 
 async function loadInvite(token: string) {
@@ -82,25 +83,17 @@ export async function POST(_req: NextRequest, { params }: { params: { token: str
       .where(and(eq(tripCollaborators.tripId, trip.id), eq(tripCollaborators.userId, userId)))
       .limit(1);
 
-    // Never downgrade someone who is already on the trip.
+    // Already on the trip — joining again is a no-op.
     if (existing) {
-      return NextResponse.json({
-        tripId: trip.id,
-        role: existing.role === 'owner' ? 'co-planner' : 'collaborator',
-        alreadyMember: true,
-      });
+      return NextResponse.json({ tripId: trip.id, role: 'collaborator', alreadyMember: true });
     }
 
-    const [member] = await db
+    await db
       .insert(tripCollaborators)
-      .values({ tripId: trip.id, userId, role: invite.role })
+      .values({ tripId: trip.id, userId, role: 'collaborator' })
       .returning();
 
-    return NextResponse.json({
-      tripId: trip.id,
-      role: member.role === 'owner' ? 'co-planner' : 'collaborator',
-      alreadyMember: false,
-    });
+    return NextResponse.json({ tripId: trip.id, role: 'collaborator', alreadyMember: false });
   } catch (error) {
     console.error('Invite POST error:', error);
     return NextResponse.json({ error: 'Failed to join trip' }, { status: 500 });

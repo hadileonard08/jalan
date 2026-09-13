@@ -30,7 +30,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
         .filter((row) => row.userId !== trip.userId)
         .map((row) => ({
           userId: row.userId,
-          role: (row.role === 'owner' ? 'co-planner' : 'collaborator') as 'co-planner' | 'collaborator',
+          role: 'collaborator' as const,
           isCreator: false,
           joinedAt: row.createdAt.toISOString(),
         })),

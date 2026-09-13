@@ -52,8 +52,8 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 }
 
 // POST /api/saved-trips/[id]/invites — create an invite link (owner level only).
-// Body: { role: 'owner' | 'collaborator' }  ('owner' = Master Planner Support)
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+// Invites always add a Follower; the Master Planner is whoever created the trip.
+export async function POST(_req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const userId = auth().userId;
     if (!userId) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
@@ -64,14 +64,12 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       return NextResponse.json({ error: 'Only the Master Planner can invite people' }, { status: 403 });
     }
 
-    const body = await req.json().catch(() => ({}));
-    const inviteRole = body.role === 'owner' ? 'owner' : 'collaborator';
     const token = randomBytes(24).toString('base64url');
     const expiresAt = new Date(Date.now() + INVITE_TTL_DAYS * 24 * 60 * 60 * 1000);
 
     const [invite] = await db
       .insert(tripInvites)
-      .values({ tripId: params.id, token, role: inviteRole, createdByUserId: userId, expiresAt })
+      .values({ tripId: params.id, token, role: 'collaborator', createdByUserId: userId, expiresAt })
       .returning();
 
     return NextResponse.json({ invite: serializeInvite(invite) });

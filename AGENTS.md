@@ -156,6 +156,11 @@ Gather (one-time: weather, news, deals, destination image)
 - `MAX_CLARIFICATIONS = 3`: after three consecutive questions `routeAfterExtract` diverts to `clarifyLimit`, which returns a concrete "here's how to phrase it" message, resets the count to 0, and *does* end the run. `Gather` also resets to 0 once the trip is actually being planned.
 - Tests (no LLM calls): `npx tsx scripts/test-clarify-loop.ts` (streak counting, 3-question cap, graph wiring incl. the in-graph loop), `npx tsx scripts/test-checkpointer.ts` (reset coverage across all 26 state keys, durable state survives a second run, per-run state cannot leak, threads isolated), and `npx tsx scripts/test-interrupt-loop.ts` (a node suspends mid-graph, the pending interrupt is readable, `Command({resume, update})` continues it, and the pre-interrupt node does not re-run).
 
+### Trip roles (two only)
+- **Master Planner** = the trip's creator (`saved_trips.user_id`). **Follower** = anyone with a `trip_collaborators` row. There is no co-planner tier any more — `isOwnerLevel()` is `role === 'owner'`, so only the creator can approve suggestions, invite, remove members, or delete the trip.
+- `getTripAccess()` treats **any** member row as a Follower, including a legacy row stored as `role = 'owner'`. That was a deliberate downgrade: the role was removed, so such a row no longer grants owner-level rights. Test: `npx tsx scripts/test-trip-access.ts`.
+- Invites always add a Follower — `POST …/invites` ignores any role in the body, and the invite page has no role picker.
+
 ### Concurrent review (two reviewers at once)
 - The review path had two races. Both requests could pass a `status === 'pending'` check and then both write, so the same suggestion was applied twice; and the payload write had no guard, so two accepts would silently drop one change (last write wins).
 - `src/lib/proposal-review.ts` fixes both:

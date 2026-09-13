@@ -1140,30 +1140,27 @@ function WeatherTab({ trip }: { trip: SavedTrip }) {
 
 // --- Proposals (multiplayer AI collaboration) ---
 
-// Display names for the trip roles. The trip's creator is the Master Planner;
-// a co-planner is a Master Planner Support; everyone else is a Follower.
-type TripRole = 'owner' | 'co-planner' | 'collaborator';
+// Two roles: the trip's creator is the Master Planner, everyone invited is a
+// Follower. Followers suggest and comment; only the Master Planner approves.
+type TripRole = 'owner' | 'collaborator';
 
 const ROLE_LABELS: Record<TripRole, string> = {
   owner: 'Master Planner',
-  'co-planner': 'Master Planner Support',
   collaborator: 'Follower',
 };
 
 const ROLE_BADGE_STYLES: Record<TripRole, string> = {
   owner: 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300',
-  'co-planner': 'bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300',
   collaborator: 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300',
 };
 
 const ROLE_TOOLTIPS: Record<TripRole, string> = {
   owner: 'You are the Master Planner: you can suggest, accept, or reject changes.',
-  'co-planner': 'You are a Master Planner Support: you can suggest and approve changes.',
   collaborator: 'You are a Follower: you can suggest changes, and the Master Planner approves them.',
 };
 
 function canReviewRole(role: TripRole | null) {
-  return role === 'owner' || role === 'co-planner';
+  return role === 'owner';
 }
 
 function formatPatchPreview(patch: TripProposal['patchData']) {
@@ -1509,7 +1506,6 @@ function memberLabel(member: TripMember) {
 
 function TripSharingModal({ trip, onClose }: { trip: SavedTrip; onClose: () => void }) {
   const { user } = useUser();
-  const [inviteRole, setInviteRole] = useState<'collaborator' | 'owner'>('collaborator');
   const [inviteUrl, setInviteUrl] = useState('');
   const [creating, setCreating] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -1527,11 +1523,7 @@ function TripSharingModal({ trip, onClose }: { trip: SavedTrip; onClose: () => v
     setCreating(true);
     setError('');
     try {
-      const res = await fetch(`/api/saved-trips/${trip.id}/invites`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ role: inviteRole }),
-      });
+      const res = await fetch(`/api/saved-trips/${trip.id}/invites`, { method: 'POST' });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to create invite');
       setInviteUrl(`${window.location.origin}${data.invite.url}`);
@@ -1567,29 +1559,11 @@ function TripSharingModal({ trip, onClose }: { trip: SavedTrip; onClose: () => v
           </button>
         </div>
 
-        <div className="space-y-2">
-          <div className="text-[13px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
-            Invite as
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            {([
-              { value: 'collaborator', label: 'Follower', hint: 'Can suggest & comment' },
-              { value: 'owner', label: 'Master Planner Support', hint: 'Can also approve' },
-            ] as const).map((option) => (
-              <button
-                key={option.value}
-                onClick={() => { setInviteRole(option.value); setInviteUrl(''); }}
-                className={`text-left rounded-xl border p-3 transition-colors ${
-                  inviteRole === option.value
-                    ? 'border-blue-400 bg-blue-50 dark:bg-blue-900/20'
-                    : 'border-gray-200 dark:border-gray-700 hover:border-blue-300'
-                }`}
-              >
-                <div className="text-[13px] font-medium text-gray-900 dark:text-gray-100">{option.label}</div>
-                <div className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">{option.hint}</div>
-              </button>
-            ))}
-          </div>
+        <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 p-3">
+          <div className="text-[13px] font-medium text-gray-900 dark:text-gray-100">Invite as a Follower</div>
+          <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">
+            Followers can comment and suggest changes. Only you, the Master Planner, can approve them.
+          </p>
         </div>
 
         {inviteUrl ? (
@@ -1609,7 +1583,7 @@ function TripSharingModal({ trip, onClose }: { trip: SavedTrip; onClose: () => v
               </button>
             </div>
             <p className="text-[12px] text-gray-500 dark:text-gray-400">
-              Anyone with this link joins as a {inviteRole === 'owner' ? 'Master Planner Support' : 'Follower'} after signing in. Links expire in 30 days.
+              Anyone with this link joins as a Follower after signing in. Links expire in 30 days.
             </p>
           </div>
         ) : (
