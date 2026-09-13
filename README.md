@@ -68,7 +68,7 @@ flowchart TD
     START(["START<br/>[System]"])
     END(["END<br/>[System]"])
 
-    state[("State<br/>currentItinerary · previousItineraries<br/>userPreferences · entities<br/>clarificationCount")]
+    state[("State<br/>currentItinerary · previousItineraries<br/>userPreferences · entities<br/>clarificationCount<br/>checkpointed per thread_id")]
     extract["Extract<br/>[LLM Router]<br/>parse intent + entities<br/>reads currentItinerary"]
     clarify["Clarify<br/>[LLM Agent]<br/>conversational follow-up<br/>clarificationCount + 1"]
     clarifyLimit["Clarify Limit<br/>[Safe Fallback]<br/>stop asking, suggest phrasing<br/>resets clarificationCount"]
@@ -121,7 +121,7 @@ flowchart TD
 
 | Node | Type | Description |
 |------|------|-------------|
-| **Extract** | LLM Router | Uses `chrono-node` + LLM to parse destination, dates, duration, cabin, travelers, budget, and intent. Yearless dates resolve to the next future occurrence; explicit past travel dates are rejected. Enforces a 30-day duration cap. |
+| **Extract** | LLM Router | Uses `chrono-node` + LLM to parse destination, dates, duration, cabin, travelers, budget, and intent. Yearless dates resolve to the next future occurrence; explicit past travel dates are rejected. Enforces a 30-day duration cap. Also clears every per-run state field at the start of each turn, since thread state is checkpointed. |
 | **Clarify** | LLM Agent | Asks follow-up questions for missing fields and prompts users to replace invalid or past date ranges. Increments `clarificationCount` and ends the run, so the user's reply comes back through Extract on the next turn. |
 | **Clarify Limit** | Safe Fallback | Loop guard. After three clarifying questions in a row it stops asking and answers with concrete phrasing examples ("5 days in Tokyo in October"), then resets `clarificationCount` to 0. |
 | **Gather** | Tool Integration | Fetches weather (Open-Meteo), news (Gemini web search), live deals (Seats.aero), and destination images once. Retrieved context is retained across revisions. Also resets `clarificationCount` — the trip is finally being planned. |
@@ -368,6 +368,7 @@ A sign-in-gated full-page view accessible from the left sidebar that lets users:
 - **Frontend**: Next.js 14 App Router, React, TypeScript, Tailwind CSS, SWR, Clerk auth, Leaflet (interactive maps)
 - **Backend**: Next.js Route Handlers (Node runtime), Vercel serverless functions
 - **AI**: LangChain + LangGraph, Google Gemini (hybrid: `gemini-3.5-flash` for quality, `gemini-3.5-flash-lite` for speed + Delta Updates)
+- **Agent state**: LangGraph Postgres checkpointer (`@langchain/langgraph-checkpoint-postgres` + `pg`) — one thread per conversation, resumed on the next user message
 - **Flight deals**: Seats.aero Partner API (live search + trip details)
 - **Transport routing**: OSRM (free walking/driving times + Table Service for route optimization) + Nominatim (geocoding with two-tier validation + PostgreSQL cache)
 - **Maps**: Leaflet + CARTO Voyager tiles (modern cartography, API key configured)
@@ -535,6 +536,7 @@ src/
     weather.ts               # Open-Meteo forecast + climate projections
     news-search.ts           # Destination news search (Gemini web search grounding)
     graph.ts                 # Itinerary graph for deal modal (architect → critic)
+    checkpointer.ts          # LangGraph Postgres checkpointer (per-thread state, pg pool capped at 1)
     ...
   lib/
     route-optimizer.ts       # OSRM Table Service + 2-opt route optimization with time-block scheduling
@@ -616,10 +618,12 @@ scripts/
    - `NEXT_PUBLIC_CARTO_API_KEY` — optional, enables authenticated CARTO Voyager map tiles (free within fair use).
    - `CRON_SECRET` — required for the Vercel cron endpoints (weather alerts/snapshots); requests without a matching `Authorization: Bearer` header get a 401.
 
-3. **Run the database migration:**
+3. **Set up the database** (schema + the LangGraph checkpoint tables):
    ```bash
-   npm run db:push
+   npm run db:push                          # Drizzle schema
+   npx tsx scripts/setup-checkpointer.ts    # checkpoints / checkpoint_blobs / checkpoint_writes
    ```
+   `setup-checkpointer.ts` only applies missing migrations, so it is safe to re-run. If you skip it, the graph still runs — it just starts each turn without persisted thread state.
 
 4. **Start the dev server:**
    ```bash
@@ -686,7 +690,8 @@ scripts/
 - Built a **One Stop panel** (sign-in-gated, full-page) with a trip selector (sidebar on desktop, dropdown on mobile), inline itinerary images, to-dos, timestamped notes, per-day collaboration (thumbs up/down + comment threads), AI change proposals, manual flight/hotel/train entries, PDF document uploads attachable to a booking, a cron-refreshed weather tab, interactive route maps, copy summary, and delete/leave — all organized in clean card headers. Includes **duplicate trip prevention** (server-side + client-side by conversationId or destination + dates).
 - Designed **multiplayer AI collaboration with an approval gate**: roles (Master Planner / Master Planner Disciple / Follower) enforced server-side in one shared access helper; Followers describe a change in plain English and the AI converts it into a stored JSON patch that only owner-level roles can accept. Accepting reuses the deterministic `mergeItineraryPatch()` reducer, a patch that no longer matches returns 422 instead of falsely succeeding, and accepted changes propagate to other collaborators' open panels within ~30 seconds.
 - Added **trip invites** — 30-day multi-use invite links with role selection, a member list resolving real names/emails/avatars through the Clerk Backend API (5-minute cache, 5s timeout, graceful fallback to the ID), and a **Leave trip** path for non-owners.
-- Added a **clarification loop guard** to the LangGraph flow: the streak of consecutive clarifying questions is derived from persisted history (no checkpointer, which would be useless on serverless), and after 3 in a row the router diverts to a fallback node that suggests concrete phrasing and resets the counter.
+- Added a **clarification loop guard** to the LangGraph flow: after 3 consecutive clarifying questions the router diverts to a fallback node that suggests concrete phrasing and resets the counter, and the streak is also derived from persisted history so it works even on a thread with no checkpoint yet.
+- Wired up **durable thread state** with a LangGraph **Postgres checkpointer** (`thread_id` = conversation id, invoked from Vercel serverless over Neon's pooled endpoint with `max: 1`). Because state then survives between turns, every per-run field is cleared at the top of `extractNode` — a test asserts all 26 state keys are consciously classified as reset or durable, so a stale `revisionCount`/`isApproved` can never make the Critic reject a fresh itinerary without retrying.
 - Integrated **Clerk authentication** with anonymous session merging and sign-in-gated features.
 - Added **vague message handling** — when users send unclear messages, the agent asks warm, conversational follow-ups with example trip ideas.
 - Used **chrono-node** for flexible natural-language date parsing (e.g. *"in two weeks"*, *"next October"*, *"2 week trip"*).
