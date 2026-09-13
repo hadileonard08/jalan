@@ -11,6 +11,10 @@
     {
       "path": "/api/cron/cleanup-old-flights",
       "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/cron/weather-check",
+      "schedule": "0 8 * * *"
     }
   ]
 }

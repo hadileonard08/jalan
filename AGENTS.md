@@ -40,6 +40,12 @@ npx tsx scripts/test-images.ts --destination London     # test specific destinat
 npx tsx scripts/test-images.ts --full                   # hydration test only
 ```
 
+### Weather alert test (NO Gemini tokens, NO network, NO database writes)
+```bash
+npx tsx scripts/test-weather-alerts.ts   # covers thresholds, WMO codes, cron auth, date targeting, and persistence
+```
+All external calls and Drizzle queries are mocked, so this is safe to run anywhere.
+
 ### Smoke tests (local first, then production)
 ```bash
 # Step 1: Start dev server
@@ -65,6 +71,13 @@ npx tsx scripts/smoke-test.ts
 - The primary production URL is `jalan-ai.vercel.app` (not `flight-deals-dashboard.vercel.app`).
 - After `npx vercel --prod`, always run `npx vercel alias <deployment-url> jalan-ai.vercel.app`.
 - Vercel auth token lives at `~/Library/Application Support/com.vercel.cli/auth.json`.
+
+## Weather Alerts (Vercel Cron)
+
+- `vercel.json` schedules `/api/cron/weather-check` daily at 08:00 UTC.
+- Requires `CRON_SECRET` in the Vercel project environment variables. Vercel sends it automatically as `Authorization: Bearer $CRON_SECRET`; the route returns 401 when it is missing or wrong.
+- The cron checks saved trips departing two calendar days ahead (UTC) and writes or clears `saved_trips.weather_alert`. Alerts appear as an amber banner at the top of the One Stop trip card.
+- Weather lookups reuse saved route coordinates and fall back to Open-Meteo geocoding by destination name. A failed lookup leaves the existing alert untouched rather than clearing it.
 
 ## Known Bugs & Fixes (lessons learned)
 

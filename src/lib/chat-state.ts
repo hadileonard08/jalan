@@ -186,6 +186,7 @@ export interface SavedTrip {
   destination: string;
   dates: string;
   payload: ChatPayload;
+  weatherAlert?: string | null;
   todos: { id: string; text: string; done: boolean }[];
   notes: string;
   // Per-stop feedback keyed by landmark name (lowercased).

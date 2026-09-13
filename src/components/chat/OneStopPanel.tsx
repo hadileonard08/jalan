@@ -6,6 +6,7 @@ import {
   X, Plus, Trash2, CheckSquare, Square, Plane, Clipboard, StickyNote,
   MapPin, Calendar, Map, Bell, ThumbsUp, ThumbsDown, MessageSquare,
   FileText, Upload, Download, Hotel, Train, Car, ChevronDown, ChevronUp,
+  AlertTriangle,
 } from 'lucide-react';
 import type {
   SavedTrip, ChatPayload, StopFeedback, StopComment, DayFeedback, DayComment,
@@ -803,6 +804,15 @@ function SavedTripCard({ trip, onUpdate, onDelete }: { trip: SavedTrip; onUpdate
 
   return (
     <div className="border border-black/[0.05] dark:border-white/[0.1] rounded-[20px] bg-white dark:bg-[#2c2c2e] shadow-[0_8px_30px_rgba(0,0,0,0.08)] overflow-hidden">
+      {trip.weatherAlert && (
+        <div className="flex items-start gap-2.5 bg-amber-50 dark:bg-amber-900/20 border-b border-amber-200 dark:border-amber-800/40 px-4 py-3">
+          <AlertTriangle size={18} className="text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
+          <div className="min-w-0 text-[13px] leading-snug text-amber-800 dark:text-amber-200">
+            <span className="font-semibold">Weather alert</span>
+            <p className="mt-0.5 break-words">{trip.weatherAlert}</p>
+          </div>
+        </div>
+      )}
       <div className="p-4 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 flex items-start justify-between gap-3">
         <div>
           <div className="flex items-center gap-2 font-semibold text-gray-900 dark:text-gray-100">

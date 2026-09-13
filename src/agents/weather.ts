@@ -1,4 +1,5 @@
 import { AIRPORT_NAMES } from '../lib/airports';
+import { z } from 'zod';
 
 const WEATHER_CITIES: Record<string, string> = {
   // Asia
@@ -173,4 +174,94 @@ export async function getWeatherForecast(destinationCode: string, startDate: Dat
     console.log('Weather lookup failed:', (error as Error).message);
     return null;
   }
+}
+
+const weatherCoordinatesSchema = z.object({
+  lat: z.number().min(-90).max(90),
+  lon: z.number().min(-180).max(180),
+});
+
+const departureForecastSchema = z.object({
+  daily: z.object({
+    time: z.array(z.string()),
+    precipitation_probability_max: z.array(z.number().min(0).max(100).nullable()),
+    weather_code: z.array(z.number().int().min(0).max(99).nullable()),
+    temperature_2m_max: z.array(z.number().finite().nullable()),
+    temperature_2m_min: z.array(z.number().finite().nullable()),
+    wind_gusts_10m_max: z.array(z.number().nonnegative().finite().nullable()),
+  }),
+});
+
+export async function getDepartureWeatherAlert({
+  destination,
+  destinationCode,
+  departureDate,
+  waypoints,
+}: {
+  destination: string;
+  destinationCode?: string | null;
+  departureDate: string;
+  waypoints?: unknown;
+}): Promise<string | null> {
+  const savedPoint = Array.isArray(waypoints)
+    ? waypoints.find((point) => weatherCoordinatesSchema.safeParse(point).success)
+    : undefined;
+  const parsedPoint = weatherCoordinatesSchema.safeParse(savedPoint);
+  let coordinates = parsedPoint.success ? parsedPoint.data : null;
+
+  if (!coordinates) {
+    const code = destinationCode?.toUpperCase() || '';
+    const city = WEATHER_CITIES[code] || AIRPORT_NAMES[code] || destination;
+    const geoUrl = new URL('https://geocoding-api.open-meteo.com/v1/search');
+    geoUrl.search = new URLSearchParams({ name: city, count: '1', language: 'en' }).toString();
+    const geoResponse = await fetch(geoUrl, { cache: 'no-store', signal: AbortSignal.timeout(5000) });
+    if (!geoResponse.ok) throw new Error('Destination geocoding failed');
+    const geoData = await geoResponse.json();
+    const location = geoData?.results?.[0];
+    const parsedLocation = weatherCoordinatesSchema.safeParse({ lat: location?.latitude, lon: location?.longitude });
+    if (!parsedLocation.success) throw new Error('Destination coordinates unavailable');
+    coordinates = parsedLocation.data;
+  }
+
+  const forecastUrl = new URL('https://api.open-meteo.com/v1/forecast');
+  forecastUrl.search = new URLSearchParams({
+    latitude: String(coordinates.lat),
+    longitude: String(coordinates.lon),
+    start_date: departureDate,
+    end_date: departureDate,
+    daily: 'precipitation_probability_max,weather_code,temperature_2m_max,temperature_2m_min,wind_gusts_10m_max',
+    timezone: 'auto',
+    temperature_unit: 'celsius',
+    wind_speed_unit: 'kmh',
+  }).toString();
+  const response = await fetch(forecastUrl, { cache: 'no-store', signal: AbortSignal.timeout(5000) });
+  if (!response.ok) throw new Error('Departure weather forecast failed');
+  const { daily } = departureForecastSchema.parse(await response.json());
+  const index = daily.time.indexOf(departureDate);
+  const probability = daily.precipitation_probability_max[index];
+  const code = daily.weather_code[index];
+  const high = daily.temperature_2m_max[index];
+  const low = daily.temperature_2m_min[index];
+  const gusts = daily.wind_gusts_10m_max[index];
+  if (index < 0 || probability == null || code == null || high == null || low == null || gusts == null) {
+    throw new Error('Departure date forecast is incomplete');
+  }
+
+  const warnings: string[] = [];
+  const freezing = [56, 57, 66, 67].includes(code);
+  const snow = [71, 73, 75, 77, 85, 86].includes(code);
+  if (probability > 50) {
+    warnings.push(freezing || snow
+      ? `${probability}% chance of precipitation. Pack warm, waterproof layers.`
+      : `${probability}% chance of rain. Don't forget an umbrella.`);
+  }
+  if ([95, 96, 99].includes(code)) warnings.push('Thunderstorms are forecast. Consider indoor alternatives.');
+  if ([65, 82].includes(code)) warnings.push('Heavy rain is forecast. Allow extra travel time.');
+  if (freezing) warnings.push('Freezing rain or drizzle is forecast. Watch for slippery paths and travel disruption.');
+  if (snow) warnings.push('Snow is forecast. Pack warm layers and check local travel conditions.');
+  if (high >= 35) warnings.push(`Heat up to ${Math.round(high)}°C is forecast. Stay hydrated and plan breaks indoors.`);
+  if (low <= -10) warnings.push(`Cold down to ${Math.round(low)}°C is forecast. Pack insulated layers.`);
+  if (gusts >= 60) warnings.push(`Strong wind gusts up to ${Math.round(gusts)} km/h are forecast. Reconsider exposed outdoor activities.`);
+
+  return warnings.length ? `Heads up! Weather in ${destination} on ${departureDate}: ${warnings.join(' ')}` : null;
 }

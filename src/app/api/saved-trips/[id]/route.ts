@@ -43,6 +43,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
         conversationId: updated.conversationId || '',
         destination: updated.destination,
         dates: updated.dates || 'Dates TBD',
+        weatherAlert: updated.weatherAlert,
         payload: JSON.parse(updated.payload),
         todos: JSON.parse(updated.todos),
         notes: updated.notes,
