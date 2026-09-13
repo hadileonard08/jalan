@@ -48,6 +48,7 @@ const puppeteer = require('puppeteer');
     hasClarifyLimit: (document.querySelector('#out svg')?.textContent || '').includes('Clarify Limit'),
     hasGuardEdge: (document.querySelector('#out svg')?.textContent || '').includes('after 3 questions in a row'),
     hasResumeEdge: (document.querySelector('#out svg')?.textContent || '').includes('resumed on the next user message'),
+    hasClarifyLoopEdge: (document.querySelector('#out svg')?.textContent || '').includes('user reply re-enters Extract'),
   }));
 
   console.log(JSON.stringify(result, null, 2));

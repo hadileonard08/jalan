@@ -104,6 +104,11 @@ flowchart TD
     clarifyLimit --> END
     answer --> END
 
+    %% The clarification loop crosses the request boundary: the run ends at
+    %% Clarify, and the user's reply starts a NEW run that re-enters Extract
+    %% with the same checkpointed thread — up to 3 questions in a row.
+    clarify -.->|"user reply re-enters Extract (new run)"| extract
+
     %% Main pipeline — Gather clears the clarification streak
     gather --> generate
     generate --> guardrails
@@ -154,7 +159,9 @@ The Extract node is an **LLM router** — it classifies the user's intent and ch
 | *"Make it shorter"* (after a plan) | `refine` | No | **Apply Refinements** (JSON Patch on existing itinerary — bypasses Gather/Generate) |
 | *"somewhere warm I guess"* (3 questions already asked) | `vague` | — | **Clarify Limit** (stops asking, suggests how to phrase it, resets the counter) |
 
-**Clarify is a conditional detour, not a prerequisite.** If the user provides enough information upfront (destination + dates), the flow skips Clarify and goes directly to Gather. After Clarify asks for missing info and the user replies, the next turn re-routes through Extract — which then sends the complete request to Gather.
+**Clarify is a conditional detour, not a prerequisite.** If the user provides enough information upfront (destination + dates), the flow skips Clarify and goes directly to Gather.
+
+**The clarification loop crosses the request boundary.** Within a single run, Clarify has nothing to loop back with — the user hasn't answered yet — so the run ends there and that *is* the pause. The loop closes on the next HTTP request: `START → Extract` again, carrying the checkpointed thread state (`thread_id`) plus the replayed conversation, so the answer is evaluated together with the question it responds to. Repeat up to `MAX_CLARIFICATIONS = 3`, after which the router diverts to Clarify Limit. A true in-run loop would require LangGraph's `interrupt()` + `Command(resume)`, which this graph does not use.
 
 **Thread state is checkpointed, and the clarification streak survives across turns.** The graph is compiled with a **Postgres checkpointer** and invoked with `configurable: { thread_id: conversation.id }`, so a run can pause at END and resume with the same state when the user replies. The whole conversation is still replayed from PostgreSQL each turn, and `clarificationCount` is additionally derived by `countTrailingClarifications()` — the chat route marks an assistant message with `payload.clarification` whenever a run ends at the Clarify node, and the counter walks backwards over consecutive marked messages. After `MAX_CLARIFICATIONS = 3` in a row, the router diverts to **Clarify Limit** instead of asking a fourth time.
 
