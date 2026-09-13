@@ -377,7 +377,7 @@ A sign-in-gated full-page view accessible from the left sidebar that lets users:
 - **Notes** — timestamped note entries with an **Add note** button, plus the legacy free-form notes field when a trip has one.
 - **Per-day collaboration** — thumbs up/down and a scrollable comment thread for every day, with the itinerary on the left and the collaboration panel pinned to the right.
 - **Suggest a change (AI proposals)** — under each day's comments, any collaborator can describe a change; the AI generates a JSON patch and stores it as a pending proposal. Owner-level roles get Accept/Reject plus a "waiting for approval" badge in the trip header that opens a review sheet; suggesters get Edit & regenerate and Withdraw on their own pending suggestions.
-- **Roles and invites** — a Master Planner / Follower badge, invite links, a member list with real names and avatars, and Leave trip for Followers.
+- **Roles and invites** — a Master Planner / Follower badge, invite links, a member list with real names and avatars, Leave trip for Followers, and **ownership transfer** so a trip isn't stuck if the Master Planner steps away.
 - **Flights & Docs** — manual flight/hotel/train/car entries with confirmation codes, plus PDF document uploads (e-tickets, vouchers) stored as base64 data URLs. A PDF can be attached to a booking at creation time so tickets and bookings stay together.
 - **Weather tab** — the destination forecast stored by the daily weather cron, with a "forecast for your trip" view when the dates are in range and the current outlook otherwise.
 - **Interactive route maps** — each day's route is rendered on a Leaflet map with CARTO Voyager tiles.
@@ -520,6 +520,7 @@ A sign-in-gated full-page view accessible from the left sidebar that lets users:
 - `GET` / `POST /api/saved-trips/[id]/invites` — list or mint 30-day invite links (owner level only).
 - `GET /api/saved-trips/[id]/members` — members with role plus names/emails/avatars resolved via the Clerk Backend API.
 - `DELETE /api/saved-trips/[id]/members/[memberId]` — remove a member (owner level) or leave the trip (`me`).
+- `POST /api/saved-trips/[id]/transfer` — hand the trip to another member (Master Planner only). The outgoing Master Planner stays as a Follower, or leaves entirely with `keepPreviousOwner: false`.
 - `GET /api/invites/[token]` — invite details shown on the join page (public).
 - `POST /api/invites/[token]` — join the trip with the invited role.
 - `GET` / `PATCH /api/user-preferences` — read or update the signed-in user's Traveler Profile.
@@ -579,6 +580,7 @@ src/
     itinerary-cleanup.ts     # Strips trailing AI follow-up questions from saved itineraries
     refresh-enrichment.ts    # Rebuilds a day's hero image, route links, map waypoints and transport notes after an approved edit
     proposal-review.ts       # Concurrency guards: atomic proposal claim + compare-and-swap on the itinerary payload
+    trip-ownership.ts        # Master Planner handover: moves saved_trips.user_id and fixes up member rows
     ai-provider.ts           # LLM model configuration (hybrid: speed + quality models)
     ragEvaluator.ts          # Typed RAG Triad LLM-as-a-judge evaluation
     airports.ts              # Airport code/name mappings (70+ global destinations)
@@ -626,6 +628,7 @@ scripts/
   test-refresh-enrichment.ts # Post-approval refresh: affected days, note de-duplication, stale hero-image detection
   test-review-concurrency.ts # Concurrent review guards, with real parallel calls against Postgres
   test-trip-access.ts        # Roles: Master Planner vs Follower, incl. legacy owner-row downgrade
+  test-ownership-transfer.ts # Master Planner handover: guards, both stay/leave modes, racing transfers
   backfill-enrichment.ts     # Repairs trips edited before the refresh existed (--dry-run supported)
   test-readme-diagram.cjs    # Renders the README Mermaid diagram in a browser to catch syntax errors
   setup-checkpointer.ts      # One-time creation of the LangGraph checkpoint tables

@@ -7,7 +7,7 @@ import {
   MapPin, Calendar, Map, Bell, ThumbsUp, ThumbsDown, MessageSquare,
   FileText, Upload, Download, Hotel, Train, Car, ChevronDown, ChevronUp,
   AlertTriangle, Sparkles, UserCog, UserPlus, Link2, Check, LogOut,
-  List, Sun, Briefcase,
+  List, Sun, Briefcase, Crown,
 } from 'lucide-react';
 import { useUser } from '@/components/AuthProvider';
 import type {
@@ -1504,13 +1504,23 @@ function memberLabel(member: TripMember) {
   return member.name || member.email || shortUserId(member.userId);
 }
 
-function TripSharingModal({ trip, onClose }: { trip: SavedTrip; onClose: () => void }) {
+function TripSharingModal({
+  trip,
+  onClose,
+  onTransferred,
+}: {
+  trip: SavedTrip;
+  onClose: () => void;
+  /** `leftTrip` is true when the outgoing Master Planner gave up their access. */
+  onTransferred: (leftTrip: boolean) => void;
+}) {
   const { user } = useUser();
   const [inviteUrl, setInviteUrl] = useState('');
   const [creating, setCreating] = useState(false);
   const [copied, setCopied] = useState(false);
   const [members, setMembers] = useState<TripMember[]>([]);
   const [error, setError] = useState('');
+  const [transferring, setTransferring] = useState<string | null>(null);
 
   useEffect(() => {
     fetch(`/api/saved-trips/${trip.id}/members`)
@@ -1518,6 +1528,32 @@ function TripSharingModal({ trip, onClose }: { trip: SavedTrip; onClose: () => v
       .then((data) => { if (Array.isArray(data.members)) setMembers(data.members); })
       .catch(() => {});
   }, [trip.id]);
+
+  const transferTo = async (member: TripMember) => {
+    const name = memberLabel(member);
+    const keepMe = window.confirm(
+      `Make ${name} the Master Planner of this trip?\n\n` +
+        `They will be able to approve or reject suggestions, invite people, remove members, and delete the trip.\n\n` +
+        `OK = you stay on the trip as a Follower.\nCancel = nothing changes.`,
+    );
+    if (!keepMe) return;
+
+    setTransferring(member.userId);
+    setError('');
+    try {
+      const res = await fetch(`/api/saved-trips/${trip.id}/transfer`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ toUserId: member.userId, keepPreviousOwner: true }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to transfer the trip');
+      onTransferred(false);
+    } catch (err: any) {
+      setError(err.message || 'Failed to transfer the trip');
+    }
+    setTransferring(null);
+  };
 
   const createInvite = async () => {
     setCreating(true);
@@ -1624,6 +1660,20 @@ function TripSharingModal({ trip, onClose }: { trip: SavedTrip; onClose: () => v
               <span className={`text-[11px] px-2 py-0.5 rounded-full flex-shrink-0 ${ROLE_BADGE_STYLES[member.role]}`}>
                 {ROLE_LABELS[member.role]}
               </span>
+              {/* This modal is only reachable by owner-level viewers (the Invite
+                  button is gated on canReviewRole), and the API re-checks. */}
+              {!member.isCreator && (
+                <button
+                  onClick={() => transferTo(member)}
+                  disabled={transferring !== null}
+                  className="text-gray-400 hover:text-blue-600 p-1 flex-shrink-0 disabled:opacity-40"
+                  title="Make this person the Master Planner"
+                >
+                  {transferring === member.userId
+                    ? <span className="animate-spin text-[11px]">⟳</span>
+                    : <Crown size={13} />}
+                </button>
+              )}
               {!member.isCreator && (
                 <button
                   onClick={() => removeMember(member.userId)}
@@ -2143,7 +2193,16 @@ function SavedTripCard({ trip, onUpdate, onDelete, onLeave, onPayloadRefresh, is
       </div>
 
       {sharingOpen && (
-        <TripSharingModal trip={trip} onClose={() => setSharingOpen(false)} />
+        <TripSharingModal
+          trip={trip}
+          onClose={() => setSharingOpen(false)}
+          onTransferred={(leftTrip) => {
+            setSharingOpen(false);
+            // Handing the trip over changes this viewer's role, so re-read it.
+            if (leftTrip) onLeave?.();
+            else syncFromServer();
+          }}
+        />
       )}
 
       {reviewOpen && (
