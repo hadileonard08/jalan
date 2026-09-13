@@ -6,11 +6,12 @@ import {
   X, Plus, Trash2, CheckSquare, Square, Plane, Clipboard, StickyNote,
   MapPin, Calendar, Map, Bell, ThumbsUp, ThumbsDown, MessageSquare,
   FileText, Upload, Download, Hotel, Train, Car, ChevronDown, ChevronUp,
-  AlertTriangle,
+  AlertTriangle, Sparkles, UserCog,
 } from 'lucide-react';
+import { useUser } from '@/components/AuthProvider';
 import type {
   SavedTrip, ChatPayload, StopFeedback, StopComment, DayFeedback, DayComment,
-  ManualFlightEntry, UploadedDocument, WeatherSnapshot,
+  ManualFlightEntry, UploadedDocument, WeatherSnapshot, TripProposal,
 } from '@/lib/chat-state';
 import { stripFollowUpQuestions } from '@/lib/itinerary-cleanup';
 import type { DayTransport } from '@/agents/transport';
@@ -997,11 +998,226 @@ function WeatherTab({ trip }: { trip: SavedTrip }) {
   );
 }
 
+// --- Proposals tab (multiplayer AI collaboration) ---
+
+function formatPatchPreview(patch: TripProposal['patchData']) {
+  if (!patch.edits || patch.edits.length === 0) return 'No specific edits generated.';
+  return patch.edits.map((edit) => {
+    switch (edit.action) {
+      case 'replace_stop':
+        return `Replace ${edit.targetStopName || 'a stop'} with ${edit.newDetails?.name || 'new stop'} on Day ${edit.dayNumber}`;
+      case 'add_stop':
+        return `Add ${edit.newDetails?.name || 'new stop'} to Day ${edit.dayNumber}${edit.newDetails?.time_slot ? ` (${edit.newDetails.time_slot})` : ''}`;
+      case 'remove_stop':
+        return `Remove ${edit.targetStopName || 'a stop'} from Day ${edit.dayNumber}`;
+      case 'update_note':
+        return `Update note for ${edit.targetStopName || 'a stop'} on Day ${edit.dayNumber}`;
+      default:
+        return `Edit on Day ${edit.dayNumber}`;
+    }
+  }).join(' • ');
+}
+
+function ProposalsTab({
+  trip,
+  role,
+  proposals,
+  proposalInput,
+  setProposalInput,
+  submittingProposal,
+  onSubmit,
+  onReview,
+  actionId,
+  userId,
+}: {
+  trip: SavedTrip;
+  role: 'owner' | 'collaborator' | null;
+  proposals: TripProposal[];
+  proposalInput: string;
+  setProposalInput: (value: string) => void;
+  submittingProposal: boolean;
+  onSubmit: () => void;
+  onReview: (proposalId: string, action: 'accept' | 'reject') => void;
+  actionId: string | null;
+  userId?: string;
+}) {
+  const canSuggest = role === 'collaborator' || role === 'owner';
+  const canReview = role === 'owner';
+  const pending = proposals.filter((p) => p.status === 'pending');
+  const myProposals = proposals.filter((p) => p.proposedByUserId === userId);
+
+  return (
+    <div className="space-y-4">
+      {canSuggest && (
+        <div className="border border-gray-200 dark:border-gray-700 rounded-xl p-3 bg-gray-50 dark:bg-gray-800/50 space-y-2">
+          <div className="flex items-center gap-2 text-sm font-medium text-gray-900 dark:text-gray-100">
+            <Sparkles size={16} className="text-blue-600" />
+            {role === 'owner' ? 'Suggest a Change' : 'Suggest a Change'}
+          </div>
+          <p className="text-[12px] text-gray-500 dark:text-gray-400">
+            {role === 'owner'
+              ? 'Describe a change and preview the AI patch before applying it.'
+              : 'Describe the change you want. The trip owner will review it before it is applied.'}
+          </p>
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={proposalInput}
+              onChange={(e) => setProposalInput(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && onSubmit()}
+              placeholder="e.g. 'Swap Day 2 lunch for a vegan spot'"
+              disabled={submittingProposal}
+              className="flex-1 text-sm border border-gray-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-400 disabled:opacity-60"
+            />
+            <button
+              onClick={onSubmit}
+              disabled={submittingProposal || !proposalInput.trim()}
+              className="p-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1.5"
+            >
+              {submittingProposal ? (
+                <><span className="animate-spin">⟳</span> <span className="text-[12px]">AI...</span></>
+              ) : (
+                <Plus size={16} />
+              )}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {!canSuggest && (
+        <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/40 p-4 text-sm text-gray-500 dark:text-gray-400 text-center">
+          Sign in to suggest or review itinerary changes.
+        </div>
+      )}
+
+      {canReview && pending.length > 0 && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2 text-[13px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+            <UserCog size={14} /> Review Suggestions ({pending.length})
+          </div>
+          {pending.map((proposal) => (
+            <div key={proposal.id} className="border border-gray-200 dark:border-gray-700 rounded-xl p-3 bg-white dark:bg-gray-800 space-y-2">
+              <div className="text-sm text-gray-900 dark:text-gray-100">"{proposal.suggestedPrompt}"</div>
+              <div className="text-[12px] text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-900/40 rounded-lg p-2">
+                <span className="font-medium text-gray-600 dark:text-gray-300">AI patch preview:</span> {formatPatchPreview(proposal.patchData)}
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => onReview(proposal.id, 'accept')}
+                  disabled={actionId === proposal.id}
+                  className="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 text-[13px] font-medium rounded-lg bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300 hover:bg-green-200 dark:hover:bg-green-900/50 disabled:opacity-60"
+                >
+                  {actionId === proposal.id ? <span className="animate-spin">⟳</span> : <CheckSquare size={13} />}
+                  Accept
+                </button>
+                <button
+                  onClick={() => onReview(proposal.id, 'reject')}
+                  disabled={actionId === proposal.id}
+                  className="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 text-[13px] font-medium rounded-lg bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 hover:bg-red-200 dark:hover:bg-red-900/50 disabled:opacity-60"
+                >
+                  {actionId === proposal.id ? <span className="animate-spin">⟳</span> : <X size={13} />}
+                  Reject
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {role === 'collaborator' && myProposals.length > 0 && (
+        <div className="space-y-2">
+          <div className="text-[13px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+            My Pending Suggestions
+          </div>
+          {myProposals.map((proposal) => (
+            <div key={proposal.id} className="border border-gray-200 dark:border-gray-700 rounded-xl p-3 bg-white dark:bg-gray-800">
+              <div className="text-sm text-gray-900 dark:text-gray-100">"{proposal.suggestedPrompt}"</div>
+              <div className="mt-1 text-[12px] text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-900/40 rounded-lg p-2">
+                {formatPatchPreview(proposal.patchData)}
+              </div>
+              <div className="mt-2 text-[12px] inline-flex items-center px-2 py-0.5 rounded-full bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300">
+                {proposal.status}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {role === 'owner' && pending.length === 0 && proposals.length === 0 && (
+        <div className="text-sm text-gray-500 dark:text-gray-400 text-center py-8">
+          No suggestions yet. Collaborators can propose changes from this tab.
+        </div>
+      )}
+
+      {role === 'collaborator' && myProposals.length === 0 && (
+        <div className="text-sm text-gray-500 dark:text-gray-400 text-center py-8">
+          You haven&apos;t submitted any suggestions yet.
+        </div>
+      )}
+    </div>
+  );
+}
+
 // --- SavedTripCard ---
 
-function SavedTripCard({ trip, onUpdate, onDelete }: { trip: SavedTrip; onUpdate: (trip: SavedTrip) => void; onDelete?: () => void }) {
-  const [activeTab, setActiveTab] = useState<'itinerary' | 'weather' | 'routes' | 'flights' | 'packing' | 'todos' | 'notes'>('itinerary');
+function SavedTripCard({ trip, onUpdate, onDelete, isSignedIn }: { trip: SavedTrip; onUpdate: (trip: SavedTrip) => void; onDelete?: () => void; isSignedIn: boolean }) {
+  const { user } = useUser();
+  const [activeTab, setActiveTab] = useState<'itinerary' | 'weather' | 'routes' | 'flights' | 'packing' | 'todos' | 'notes' | 'proposals'>('itinerary');
   const [todoText, setTodoText] = useState('');
+  const [proposals, setProposals] = useState<TripProposal[]>([]);
+  const [proposalRole, setProposalRole] = useState<'owner' | 'collaborator' | null>(null);
+  const [proposalInput, setProposalInput] = useState('');
+  const [submittingProposal, setSubmittingProposal] = useState(false);
+  const [proposalActionId, setProposalActionId] = useState<string | null>(null);
+
+  // Load collaboration role and pending proposals for this trip.
+  useEffect(() => {
+    if (!isSignedIn) return;
+    fetch(`/api/saved-trips/${trip.id}/proposals`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.role) setProposalRole(data.role);
+        if (Array.isArray(data.proposals)) setProposals(data.proposals);
+      })
+      .catch(() => {});
+  }, [trip.id, isSignedIn]);
+
+  const submitProposal = async () => {
+    if (!proposalInput.trim() || submittingProposal) return;
+    setSubmittingProposal(true);
+    try {
+      const res = await fetch(`/api/saved-trips/${trip.id}/proposals`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: proposalInput.trim() }),
+      });
+      const data = await res.json();
+      if (data.proposal) {
+        setProposals((prev) => [data.proposal, ...prev]);
+        setProposalInput('');
+      }
+    } catch { /* ignore */ }
+    setSubmittingProposal(false);
+  };
+
+  const reviewProposal = async (proposalId: string, action: 'accept' | 'reject') => {
+    setProposalActionId(proposalId);
+    try {
+      const res = await fetch(`/api/saved-trips/${trip.id}/proposals/${proposalId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      });
+      const data = await res.json();
+      if (data.proposal) {
+        setProposals((prev) => prev.map((p) => (p.id === proposalId ? data.proposal : p)));
+      }
+      if (action === 'accept' && data.trip) {
+        onUpdate({ ...trip, payload: data.trip.payload });
+      }
+    } catch { /* ignore */ }
+    setProposalActionId(null);
+  };
 
   const addTodo = () => {
     if (!todoText.trim()) return;
@@ -1080,7 +1296,7 @@ function SavedTripCard({ trip, onUpdate, onDelete }: { trip: SavedTrip; onUpdate
       </div>
 
       <div className="flex overflow-x-auto scrollbar-hide border-b border-gray-200 dark:border-gray-700 -mx-4 px-4 md:mx-0 md:px-0">
-        {(['itinerary', 'weather', 'routes', 'flights', 'packing', 'todos', 'notes'] as const).map((tab) => (
+        {(['itinerary', 'weather', 'routes', 'flights', 'packing', 'todos', 'notes', 'proposals'] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -1088,7 +1304,7 @@ function SavedTripCard({ trip, onUpdate, onDelete }: { trip: SavedTrip; onUpdate
               activeTab === tab ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-600 bg-blue-50 dark:bg-blue-900/20' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/50'
             }`}
           >
-            {tab === 'flights' ? 'Flights & Docs' : tab}
+            {tab === 'flights' ? 'Flights & Docs' : tab === 'proposals' ? 'Proposals' : tab}
           </button>
         ))}
       </div>
@@ -1207,6 +1423,21 @@ function SavedTripCard({ trip, onUpdate, onDelete }: { trip: SavedTrip; onUpdate
               className="w-full h-32 text-sm border border-gray-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 rounded-lg p-3 focus:outline-none focus:border-blue-400 resize-none"
             />
           </div>
+        )}
+
+        {activeTab === 'proposals' && (
+          <ProposalsTab
+            trip={trip}
+            role={proposalRole}
+            proposals={proposals}
+            proposalInput={proposalInput}
+            setProposalInput={setProposalInput}
+            submittingProposal={submittingProposal}
+            onSubmit={submitProposal}
+            onReview={reviewProposal}
+            actionId={proposalActionId}
+            userId={user?.id}
+          />
         )}
       </div>
     </div>
@@ -1568,7 +1799,7 @@ export default function OneStopPanel({ isOpen, onClose, savedTrips, setSavedTrip
           ) : savedTrips.length === 1 ? (
             /* --- Trips View (single trip) --- */
             <div className="flex-1 overflow-y-auto p-4 md:p-6">
-              <SavedTripCard trip={savedTrips[0]} onUpdate={updateTrip} onDelete={() => deleteTrip(savedTrips[0].id)} />
+              <SavedTripCard isSignedIn={isSignedIn} trip={savedTrips[0]} onUpdate={updateTrip} onDelete={() => deleteTrip(savedTrips[0].id)} />
             </div>
           ) : (
             /* --- Trips View (multiple trips) --- */
@@ -1622,7 +1853,7 @@ export default function OneStopPanel({ isOpen, onClose, savedTrips, setSavedTrip
                 {/* Active trip detail */}
                 <div className="flex-1 overflow-y-auto p-4 md:p-6">
                   {activeTrip ? (
-                    <SavedTripCard trip={activeTrip} onUpdate={updateTrip} onDelete={() => deleteTrip(activeTrip.id)} />
+                    <SavedTripCard isSignedIn={isSignedIn} trip={activeTrip} onUpdate={updateTrip} onDelete={() => deleteTrip(activeTrip.id)} />
                   ) : (
                     <div className="text-center text-gray-400 dark:text-gray-500 py-16">Select a trip.</div>
                   )}

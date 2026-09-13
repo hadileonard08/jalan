@@ -243,6 +243,49 @@ export function extractExistingItinerary(history: PersistedMessage[]): string {
 }
 
 // ---------------------------------------------------------------------------
+// generateItineraryPatch — generate a JSON patch without applying it
+// ---------------------------------------------------------------------------
+
+export async function generateItineraryPatch(
+  existingItinerary: string,
+  destination: string,
+  userQuery: string
+): Promise<ItineraryPatch> {
+  if (!existingItinerary) {
+    throw new Error('No existing itinerary to refine.');
+  }
+
+  const prompt = `You are a surgical editor for travel itineraries.
+
+Current itinerary for ${destination}:
+
+${existingItinerary}
+
+The user's request: "${userQuery}"
+
+Instructions:
+- You are a surgical editor. Look at the current itinerary and the user's request.
+- Output ONLY the specific edits needed to satisfy the request.
+- Do NOT rewrite the rest of the itinerary.
+- Use dayNumber (1-indexed) to target the correct day.
+- For replace_stop: provide targetStopName (the EXACT bolded stop name as it appears in the itinerary, or a short recognizable subset/keyword from it) and newDetails with the new name and/or description. The new name should be a real, well-known alternative for the destination.
+- For remove_stop: provide targetStopName of the stop to remove. If the user wants to drop a stop because they don't like it (e.g. "I don't drink beer", "replace the brewery"), use remove_stop and then optionally add_stop a replacement.
+- For add_stop: provide newDetails with name, description, and time_slot ("morning", "afternoon", or "evening").
+- For update_note: provide targetStopName and newDetails.description with the updated description.
+- If the user's request cannot be matched to a specific stop, use remove_stop for the closest bolded landmark and add_stop to insert a suitable replacement.
+- If the user is giving a dietary or preference constraint (e.g. "I don't drink beer", "no pork", "vegetarian"), remove the offending stop and add an appropriate alternative.
+- If the user's request doesn't map to any specific edit and is more of a vague style change, return an empty edits array.
+- Match stop names using the exact bolded text in the itinerary. Substrings and common keywords are acceptable (e.g. "Oktoberfest" can match a bolded stop like "Oktoberfest at Bavarian Bierhaus" or "Bavarian Bierhaus").`;
+
+  const model = getChatModel(0.2, 'gemini-3.5-flash-lite');
+  if (!model) throw new Error('AI provider not configured for refine');
+
+  const structured = (model as any).withStructuredOutput(ItineraryPatchSchema);
+  const patch = await structured.invoke(prompt);
+  return ItineraryPatchSchema.parse(patch);
+}
+
+// ---------------------------------------------------------------------------
 // applyRefinements — LangGraph node for the refine intent
 // ---------------------------------------------------------------------------
 
@@ -267,43 +310,12 @@ export async function applyRefinements(
     throw new Error('Refine intent received but no existing itinerary found in history.');
   }
 
-  // 2. Build the prompt for the LLM.
+  // 2. Generate and validate the patch.
   const destination = state.entities.destination || 'the destination';
   const userQuery = state.entities.refinementInstructions || state.userMessage || state.userQuery;
+  const validated = await generateItineraryPatch(existingItinerary, destination, userQuery);
 
-  const prompt = `You are a surgical editor for travel itineraries.
-
-Current itinerary for ${destination}:
-
-${existingItinerary}
-
-The user's request: "${userQuery}"
-
-Instructions:
-- You are a surgical editor. Look at the current itinerary and the user's request.
-- Output ONLY the specific edits needed to satisfy the request.
-- Do NOT rewrite the rest of the itinerary.
-- Use dayNumber (1-indexed) to target the correct day.
-- For replace_stop: provide targetStopName (the EXACT bolded stop name as it appears in the itinerary, or a short recognizable subset/keyword from it) and newDetails with the new name and/or description. The new name should be a real, well-known alternative for the destination.
-- For remove_stop: provide targetStopName of the stop to remove. If the user wants to drop a stop because they don't like it (e.g. "I don't drink beer", "replace the brewery"), use remove_stop and then optionally add_stop a replacement.
-- For add_stop: provide newDetails with name, description, and time_slot ("morning", "afternoon", or "evening").
-- For update_note: provide targetStopName and newDetails.description with the updated description.
-- If the user's request cannot be matched to a specific stop, use remove_stop for the closest bolded landmark and add_stop to insert a suitable replacement.
-- If the user is giving a dietary or preference constraint (e.g. "I don't drink beer", "no pork", "vegetarian"), remove the offending stop and add an appropriate alternative.
-- If the user's request doesn't map to any specific edit and is more of a vague style change, return an empty edits array.
-- Match stop names using the exact bolded text in the itinerary. Substrings and common keywords are acceptable (e.g. "Oktoberfest" can match a bolded stop like "Oktoberfest at Bavarian Bierhaus" or "Bavarian Bierhaus").`;
-
-  // 3. Call the LLM with structured output.
-  const model = getChatModel(0.2, 'gemini-3.5-flash-lite');
-  if (!model) throw new Error('AI provider not configured for refine');
-
-  const structured = (model as any).withStructuredOutput(ItineraryPatchSchema);
-  const patch = await structured.invoke(prompt);
-
-  // 4. Validate the patch.
-  const validated = ItineraryPatchSchema.parse(patch);
-
-  // 5. Apply the patch deterministically.
+  // 3. Apply the patch deterministically.
   const newItinerary = mergeItineraryPatch(existingItinerary, validated);
 
   // 6. Preserve the unpatched version and set the new one as current.

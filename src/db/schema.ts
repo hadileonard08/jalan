@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, integer, decimal, timestamp, boolean, pgEnum, text, index, doublePrecision } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, varchar, integer, decimal, timestamp, boolean, pgEnum, text, jsonb, index, doublePrecision } from 'drizzle-orm/pg-core';
 
 export const dealCategoryEnum = pgEnum('deal_category', ['GOOD_DEAL', 'MAYBE_GOOD_DEAL', 'OKAY_DEAL', 'BAD_DEAL']);
 export const fareTypeEnum = pgEnum('fare_type', ['CASH', 'POINTS']);
@@ -155,4 +155,34 @@ export const userPreferences = pgTable('user_preferences', {
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (table) => ({
   userIdx: index('user_preferences_user_id_idx').on(table.userId),
+}));
+
+// Multiplayer AI collaboration: who can view or edit a saved trip.
+export const collaboratorRoleEnum = pgEnum('collaborator_role', ['owner', 'collaborator']);
+
+export const tripCollaborators = pgTable('trip_collaborators', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tripId: uuid('trip_id').references(() => savedTrips.id, { onDelete: 'cascade' }).notNull(),
+  userId: varchar('user_id', { length: 255 }).notNull(),
+  role: collaboratorRoleEnum('role').notNull().default('collaborator'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (table) => ({
+  tripUserIdx: index('trip_collaborators_trip_user_idx').on(table.tripId, table.userId),
+  tripIdx: index('trip_collaborators_trip_id_idx').on(table.tripId),
+}));
+
+// Proposed AI-generated itinerary patches awaiting owner approval.
+export const proposalStatusEnum = pgEnum('proposal_status', ['pending', 'accepted', 'rejected']);
+
+export const tripProposals = pgTable('trip_proposals', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tripId: uuid('trip_id').references(() => savedTrips.id, { onDelete: 'cascade' }).notNull(),
+  proposedByUserId: varchar('proposed_by_user_id', { length: 255 }).notNull(),
+  status: proposalStatusEnum('status').notNull().default('pending'),
+  suggestedPrompt: text('suggested_prompt').notNull(),
+  patchData: jsonb('patch_data').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (table) => ({
+  tripIdx: index('trip_proposals_trip_id_idx').on(table.tripId),
+  statusIdx: index('trip_proposals_status_idx').on(table.status),
 }));

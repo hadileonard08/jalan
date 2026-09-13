@@ -220,3 +220,26 @@ export interface SavedTrip {
   documents: UploadedDocument[];
   savedAt: string;
 }
+
+// Multiplayer AI collaboration types.
+export type CollaboratorRole = 'owner' | 'collaborator';
+
+export interface TripCollaborator {
+  id: string;
+  tripId: string;
+  userId: string;
+  role: CollaboratorRole;
+  createdAt: string;
+}
+
+export type ProposalStatus = 'pending' | 'accepted' | 'rejected';
+
+export interface TripProposal {
+  id: string;
+  tripId: string;
+  proposedByUserId: string;
+  status: ProposalStatus;
+  suggestedPrompt: string;
+  patchData: ItineraryPatch;
+  createdAt: string;
+}
