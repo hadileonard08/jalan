@@ -1174,6 +1174,11 @@ function DayProposalBox({
           Suggest
         </button>
       </div>
+      {role === 'collaborator' && (
+        <div className="text-[11px] text-gray-400 dark:text-gray-500">
+          Sent to the Master Planner for approval.
+        </div>
+      )}
       {proposals.length > 0 && (
         <div className="space-y-2 pt-1">
           {proposals.map((proposal) => (
@@ -1330,15 +1335,39 @@ function SavedTripCard({ trip, onUpdate, onDelete, isSignedIn }: { trip: SavedTr
         </div>
       )}
       <div className="p-4 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 flex items-start justify-between gap-3">
-        <div>
-          <div className="flex items-center gap-2 font-semibold text-gray-900 dark:text-gray-100">
-            <MapPin size={16} className="text-blue-600" />
-            {trip.destination || 'Trip'}
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex items-center gap-2 font-semibold text-gray-900 dark:text-gray-100">
+              <MapPin size={16} className="text-blue-600" />
+              {trip.destination || 'Trip'}
+            </div>
+            {proposalRole && (
+              <span
+                className={`inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full ${
+                  proposalRole === 'owner'
+                    ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300'
+                    : 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300'
+                }`}
+                title={
+                  proposalRole === 'owner'
+                    ? 'You are the Master Planner: you can accept or reject suggested changes.'
+                    : 'You are a Collaborator: you can suggest changes, and the Master Planner approves them.'
+                }
+              >
+                <UserCog size={11} />
+                {proposalRole === 'owner' ? 'Master Planner' : 'Collaborator'}
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400 mt-1">
             <Calendar size={14} />
             {trip.dates || 'Dates TBD'}
           </div>
+          {proposalRole === 'collaborator' && (
+            <div className="text-[12px] text-purple-600 dark:text-purple-400 mt-1">
+              Suggest changes on any day — the Master Planner reviews them.
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-1 flex-shrink-0">
           <button
