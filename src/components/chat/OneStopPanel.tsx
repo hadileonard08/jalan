@@ -414,7 +414,7 @@ function ItineraryTab({
 }: {
   trip: SavedTrip;
   onUpdate: (trip: SavedTrip) => void;
-  proposalRole: 'owner' | 'collaborator' | null;
+  proposalRole: TripRole | null;
   proposals: TripProposal[];
   submittingDay: number | null;
   onSubmitProposal: (day: number, prompt: string) => Promise<boolean>;
@@ -1044,6 +1044,32 @@ function WeatherTab({ trip }: { trip: SavedTrip }) {
 
 // --- Proposals (multiplayer AI collaboration) ---
 
+// Display names for the trip roles. The trip's creator is the Master Planner;
+// a co-planner is a Master Planner Disciple; everyone else is a Follower.
+type TripRole = 'owner' | 'co-planner' | 'collaborator';
+
+const ROLE_LABELS: Record<TripRole, string> = {
+  owner: 'Master Planner',
+  'co-planner': 'Master Planner Disciple',
+  collaborator: 'Follower',
+};
+
+const ROLE_BADGE_STYLES: Record<TripRole, string> = {
+  owner: 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300',
+  'co-planner': 'bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300',
+  collaborator: 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300',
+};
+
+const ROLE_TOOLTIPS: Record<TripRole, string> = {
+  owner: 'You are the Master Planner: you can suggest, accept, or reject changes.',
+  'co-planner': 'You are a Master Planner Disciple: you can suggest and approve changes.',
+  collaborator: 'You are a Follower: you can suggest changes, and the Master Planner approves them.',
+};
+
+function canReviewRole(role: TripRole | null) {
+  return role === 'owner' || role === 'co-planner';
+}
+
 function formatPatchPreview(patch: TripProposal['patchData']) {
   if (!patch.edits || patch.edits.length === 0) return 'No specific edits generated.';
   return patch.edits.map((edit) => {
@@ -1132,7 +1158,7 @@ function DayProposalBox({
   actionId,
 }: {
   day: number;
-  role: 'owner' | 'collaborator' | null;
+  role: TripRole | null;
   proposals: TripProposal[];
   submitting: boolean;
   onSubmit: (day: number, prompt: string) => Promise<boolean>;
@@ -1140,10 +1166,9 @@ function DayProposalBox({
   actionId: string | null;
 }) {
   const [input, setInput] = useState('');
-  const canSuggest = role === 'owner' || role === 'collaborator';
-  const canReview = role === 'owner';
+  const canReview = canReviewRole(role);
 
-  if (!canSuggest) return null;
+  if (role === null) return null;
 
   const submit = async () => {
     if (!input.trim() || submitting) return;
@@ -1203,7 +1228,7 @@ function UnassignedProposals({
   onReview,
   actionId,
 }: {
-  role: 'owner' | 'collaborator' | null;
+  role: TripRole | null;
   proposals: TripProposal[];
   onReview: (proposalId: string, action: 'accept' | 'reject') => void;
   actionId: string | null;
@@ -1218,7 +1243,7 @@ function UnassignedProposals({
         <ProposalCard
           key={proposal.id}
           proposal={proposal}
-          canReview={role === 'owner'}
+          canReview={canReviewRole(role)}
           actionId={actionId}
           onReview={onReview}
         />
@@ -1233,7 +1258,7 @@ function SavedTripCard({ trip, onUpdate, onDelete, isSignedIn }: { trip: SavedTr
   const [activeTab, setActiveTab] = useState<'itinerary' | 'weather' | 'routes' | 'flights' | 'packing' | 'todos' | 'notes'>('itinerary');
   const [todoText, setTodoText] = useState('');
   const [proposals, setProposals] = useState<TripProposal[]>([]);
-  const [proposalRole, setProposalRole] = useState<'owner' | 'collaborator' | null>(null);
+  const [proposalRole, setProposalRole] = useState<TripRole | null>(null);
   const [submittingDay, setSubmittingDay] = useState<number | null>(null);
   const [proposalActionId, setProposalActionId] = useState<string | null>(null);
 
@@ -1343,19 +1368,11 @@ function SavedTripCard({ trip, onUpdate, onDelete, isSignedIn }: { trip: SavedTr
             </div>
             {proposalRole && (
               <span
-                className={`inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full ${
-                  proposalRole === 'owner'
-                    ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300'
-                    : 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300'
-                }`}
-                title={
-                  proposalRole === 'owner'
-                    ? 'You are the Master Planner: you can accept or reject suggested changes.'
-                    : 'You are a Collaborator: you can suggest changes, and the Master Planner approves them.'
-                }
+                className={`inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full ${ROLE_BADGE_STYLES[proposalRole]}`}
+                title={ROLE_TOOLTIPS[proposalRole]}
               >
                 <UserCog size={11} />
-                {proposalRole === 'owner' ? 'Master Planner' : 'Collaborator'}
+                {ROLE_LABELS[proposalRole]}
               </span>
             )}
           </div>

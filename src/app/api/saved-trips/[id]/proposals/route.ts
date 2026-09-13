@@ -54,9 +54,14 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
       .where(eq(tripProposals.tripId, tripId))
       .orderBy(asc(tripProposals.createdAt));
 
-    // The trip's creator is always the owner; anyone else gets the role from
-    // their trip_collaborators row (which can also be 'owner' for co-planners).
-    const role: 'owner' | 'collaborator' = isOwner ? 'owner' : (collaborator?.role ?? 'collaborator');
+    // The trip's creator is the Master Planner. Anyone else gets their role
+    // from trip_collaborators: 'owner' there is a co-planner (Disciple),
+    // anything else is a Follower.
+    const role: 'owner' | 'co-planner' | 'collaborator' = isOwner
+      ? 'owner'
+      : collaborator?.role === 'owner'
+        ? 'co-planner'
+        : 'collaborator';
     return NextResponse.json({ role, proposals: rows.map(serializeProposal) });
   } catch (error) {
     console.error('Proposals GET error:', error);
