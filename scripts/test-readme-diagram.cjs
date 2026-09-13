@@ -47,8 +47,10 @@ const puppeteer = require('puppeteer');
     hasCheckpointer: (document.querySelector('#out svg')?.textContent || '').includes('Checkpointer'),
     hasClarifyLimit: (document.querySelector('#out svg')?.textContent || '').includes('Clarify Limit'),
     hasGuardEdge: (document.querySelector('#out svg')?.textContent || '').includes('after 3 questions in a row'),
-    hasResumeEdge: (document.querySelector('#out svg')?.textContent || '').includes('resumed on the next user message'),
-    hasClarifyLoopEdge: (document.querySelector('#out svg')?.textContent || '').includes('user reply re-enters Extract'),
+    hasStateRestoreEdge: (document.querySelector('#out svg')?.textContent || '').includes('thread state restored'),
+    hasUserReplyBox: (document.querySelector('#out svg')?.textContent || '').includes('Language State Machine'),
+    hasClarifyLoopEdge: (document.querySelector('#out svg')?.textContent || '').includes('reply evaluated as a new run'),
+    hasQuestionEdge: (document.querySelector('#out svg')?.textContent || '').includes('question asked'),
   }));
 
   console.log(JSON.stringify(result, null, 2));

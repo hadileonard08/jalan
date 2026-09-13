@@ -82,6 +82,7 @@ flowchart TD
     answer["Answer<br/>[Tool / DB]<br/>deal lookup"]
     respond["Respond<br/>[Response Formatter]<br/>hydrate + assemble"]
     reject["Reject<br/>[Safe Fallback]<br/>withhold unverified draft"]
+    userReply["User Reply<br/>[Language State Machine]<br/>waits for the next message<br/>then re-enters Extract"]
 
     %% Entry — the thread's state is restored before Extract runs
     START --> state
@@ -89,7 +90,7 @@ flowchart TD
 
     %% Persistence: state survives between turns, so a run can pause at END
     state -.->|"saved after every step"| checkpointer
-    checkpointer -.->|"resumed on the next user message"| extract
+    checkpointer -.->|"thread state restored"| userReply
 
     %% Extract routing — consolidated labels to avoid overlap
     extract -->|"greeting"| respond
@@ -104,10 +105,13 @@ flowchart TD
     clarifyLimit --> END
     answer --> END
 
-    %% The clarification loop crosses the request boundary: the run ends at
-    %% Clarify, and the user's reply starts a NEW run that re-enters Extract
-    %% with the same checkpointed thread — up to 3 questions in a row.
-    clarify -.->|"user reply re-enters Extract (new run)"| extract
+    %% Dotted edges cross the request boundary. The clarification exchange is a
+    %% language state machine: Clarify ends the run, the user's reply arrives as
+    %% the next request, and it re-enters Extract with the same thread — up to
+    %% MAX_CLARIFICATIONS = 3 in a row before Clarify Limit takes over.
+    clarify -.->|"question asked"| userReply
+    clarifyLimit -.->|"asks for specifics"| userReply
+    userReply -.->|"reply evaluated as a new run"| extract
 
     %% Main pipeline — Gather clears the clarification streak
     gather --> generate
@@ -134,6 +138,7 @@ flowchart TD
 | **Extract** | LLM Router | Uses `chrono-node` + LLM to parse destination, dates, duration, cabin, travelers, budget, and intent. Yearless dates resolve to the next future occurrence; explicit past travel dates are rejected. Enforces a 30-day duration cap. Also clears every per-run state field at the start of each turn, since thread state is checkpointed. |
 | **Clarify** | LLM Agent | Asks follow-up questions for missing fields and prompts users to replace invalid or past date ranges. Increments `clarificationCount` and ends the run, so the user's reply comes back through Extract on the next turn. |
 | **Clarify Limit** | Safe Fallback | Loop guard. After three clarifying questions in a row it stops asking and answers with concrete phrasing examples ("5 days in Tokyo in October"), then resets `clarificationCount` to 0. |
+| **User Reply** | Language State Machine | The request boundary, not a node that runs. Holds the clarification exchange together: the run ends at Clarify, the user answers on their next message, and the thread's checkpointed state carries the counter and history back into Extract. |
 | **Gather** | Tool Integration | Fetches weather (Open-Meteo), news (Gemini web search), live deals (Seats.aero), and destination images once. Retrieved context is retained across revisions. Also resets `clarificationCount` — the trip is finally being planned. |
 | **Generate** | LLM Generator | Creates the itinerary and packing list, then builds route links and transport guidance. Only this stage repeats when Critic requests self-correction. |
 | **Apply Refinements** | Delta Update | Surgical editor for the `refine` intent. Uses `gemini-3.5-flash-lite` with structured outputs to generate a JSON patch (array of edits), then applies it deterministically via `mergeItineraryPatch()`. Bypasses Gather and Generate entirely — only the edited day changes, all other days remain byte-for-byte identical. |
@@ -161,7 +166,11 @@ The Extract node is an **LLM router** — it classifies the user's intent and ch
 
 **Clarify is a conditional detour, not a prerequisite.** If the user provides enough information upfront (destination + dates), the flow skips Clarify and goes directly to Gather.
 
-**The clarification loop crosses the request boundary.** Within a single run, Clarify has nothing to loop back with — the user hasn't answered yet — so the run ends there and that *is* the pause. The loop closes on the next HTTP request: `START → Extract` again, carrying the checkpointed thread state (`thread_id`) plus the replayed conversation, so the answer is evaluated together with the question it responds to. Repeat up to `MAX_CLARIFICATIONS = 3`, after which the router diverts to Clarify Limit. A true in-run loop would require LangGraph's `interrupt()` + `Command(resume)`, which this graph does not use.
+**The clarification loop crosses the request boundary — solid edges run inside a run, dotted edges cross it.** Within a single run, Clarify has nothing to loop back with: the user hasn't answered yet, so the run ends there and that *is* the pause.
+
+The **User Reply** box is that boundary. It is the language state machine that holds the exchange together: `Clarify` asks and ends → the user types an answer → the answer arrives as the next request, with the thread's state restored from the checkpointer → it re-enters `Extract`, which evaluates the reply together with the question it responds to. Repeat up to `MAX_CLARIFICATIONS = 3`, after which the router diverts to `Clarify Limit` — which also hands off to User Reply for the user's next attempt.
+
+Every terminal node (`Respond`, `Answer`, `Reject`, `Clarify`) behaves the same way: the run ends, and the user's next message starts a new run on the same thread. A true in-run loop would require LangGraph's `interrupt()` + `Command(resume)`, which this graph does not use.
 
 **Thread state is checkpointed, and the clarification streak survives across turns.** The graph is compiled with a **Postgres checkpointer** and invoked with `configurable: { thread_id: conversation.id }`, so a run can pause at END and resume with the same state when the user replies. The whole conversation is still replayed from PostgreSQL each turn, and `clarificationCount` is additionally derived by `countTrailingClarifications()` — the chat route marks an assistant message with `payload.clarification` whenever a run ends at the Clarify node, and the counter walks backwards over consecutive marked messages. After `MAX_CLARIFICATIONS = 3` in a row, the router diverts to **Clarify Limit** instead of asking a fourth time.
 
