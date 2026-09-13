@@ -223,13 +223,14 @@ function StopFeedbackBar({
               onChange={(e) => setCommentText(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && addComment()}
               placeholder="Add a note (e.g. 'Skip this, too touristy')..."
-              className="flex-1 text-[13px] border border-gray-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-blue-400"
+              className="flex-1 min-w-0 text-[13px] border border-gray-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-blue-400"
             />
             <button
               onClick={addComment}
-              className="p-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+              disabled={!commentText.trim()}
+              className="flex-shrink-0 px-3 py-1.5 text-[13px] font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
             >
-              <Plus size={14} />
+              Post
             </button>
           </div>
         </div>
@@ -385,13 +386,14 @@ function DayFeedbackBar({
             onChange={(e) => setCommentText(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && addComment()}
             placeholder="Add a comment..."
-            className="flex-1 text-[13px] border border-gray-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-blue-400"
+            className="flex-1 min-w-0 text-[13px] border border-gray-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-blue-400"
           />
           <button
             onClick={addComment}
-            className="p-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+            disabled={!commentText.trim()}
+            className="flex-shrink-0 px-3 py-1.5 text-[13px] font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
           >
-            <Plus size={14} />
+            Post
           </button>
         </div>
       </div>
@@ -998,7 +1000,7 @@ function WeatherTab({ trip }: { trip: SavedTrip }) {
   );
 }
 
-// --- Proposals tab (multiplayer AI collaboration) ---
+// --- Proposals (multiplayer AI collaboration) ---
 
 function formatPatchPreview(patch: TripProposal['patchData']) {
   if (!patch.edits || patch.edits.length === 0) return 'No specific edits generated.';
@@ -1018,8 +1020,7 @@ function formatPatchPreview(patch: TripProposal['patchData']) {
   }).join(' • ');
 }
 
-function ProposalsTab({
-  trip,
+function ProposalsSection({
   role,
   proposals,
   proposalInput,
@@ -1030,7 +1031,6 @@ function ProposalsTab({
   actionId,
   userId,
 }: {
-  trip: SavedTrip;
   role: 'owner' | 'collaborator' | null;
   proposals: TripProposal[];
   proposalInput: string;
@@ -1047,19 +1047,18 @@ function ProposalsTab({
   const myProposals = proposals.filter((p) => p.proposedByUserId === userId);
 
   return (
-    <div className="space-y-4">
+    <div className="border-t border-gray-200 dark:border-gray-700/50 pt-5 space-y-4">
       {canSuggest && (
-        <div className="border border-gray-200 dark:border-gray-700 rounded-xl p-3 bg-gray-50 dark:bg-gray-800/50 space-y-2">
-          <div className="flex items-center gap-2 text-sm font-medium text-gray-900 dark:text-gray-100">
-            <Sparkles size={16} className="text-blue-600" />
-            {role === 'owner' ? 'Suggest a Change' : 'Suggest a Change'}
+        <div className="space-y-2">
+          <div className="flex items-center gap-2 text-[13px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+            <Sparkles size={14} className="text-blue-600" /> Suggest a Change
           </div>
-          <p className="text-[12px] text-gray-500 dark:text-gray-400">
-            {role === 'owner'
+          <p className="text-[12px] text-gray-400 dark:text-gray-500">
+            {canReview
               ? 'Describe a change and preview the AI patch before applying it.'
               : 'Describe the change you want. The trip owner will review it before it is applied.'}
           </p>
-          <div className="flex items-center gap-2">
+          <div className="flex items-stretch gap-2">
             <input
               type="text"
               value={proposalInput}
@@ -1067,17 +1066,17 @@ function ProposalsTab({
               onKeyDown={(e) => e.key === 'Enter' && onSubmit()}
               placeholder="e.g. 'Swap Day 2 lunch for a vegan spot'"
               disabled={submittingProposal}
-              className="flex-1 text-sm border border-gray-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-400 disabled:opacity-60"
+              className="flex-1 min-w-0 text-sm border border-gray-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-400 disabled:opacity-60"
             />
             <button
               onClick={onSubmit}
               disabled={submittingProposal || !proposalInput.trim()}
-              className="p-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1.5"
+              className="flex-shrink-0 px-4 text-sm font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-1.5"
             >
               {submittingProposal ? (
-                <><span className="animate-spin">⟳</span> <span className="text-[12px]">AI...</span></>
+                <><span className="animate-spin">⟳</span> Generating…</>
               ) : (
-                <Plus size={16} />
+                <><Sparkles size={14} /> Suggest</>
               )}
             </button>
           </div>
@@ -1143,14 +1142,14 @@ function ProposalsTab({
         </div>
       )}
 
-      {role === 'owner' && pending.length === 0 && proposals.length === 0 && (
-        <div className="text-sm text-gray-500 dark:text-gray-400 text-center py-8">
-          No suggestions yet. Collaborators can propose changes from this tab.
+      {role === 'owner' && proposals.length === 0 && (
+        <div className="text-[13px] text-gray-400 dark:text-gray-500">
+          No suggestions yet. Collaborators can propose changes here.
         </div>
       )}
 
       {role === 'collaborator' && myProposals.length === 0 && (
-        <div className="text-sm text-gray-500 dark:text-gray-400 text-center py-8">
+        <div className="text-[13px] text-gray-400 dark:text-gray-500">
           You haven&apos;t submitted any suggestions yet.
         </div>
       )}
@@ -1162,7 +1161,7 @@ function ProposalsTab({
 
 function SavedTripCard({ trip, onUpdate, onDelete, isSignedIn }: { trip: SavedTrip; onUpdate: (trip: SavedTrip) => void; onDelete?: () => void; isSignedIn: boolean }) {
   const { user } = useUser();
-  const [activeTab, setActiveTab] = useState<'itinerary' | 'weather' | 'routes' | 'flights' | 'packing' | 'todos' | 'notes' | 'proposals'>('itinerary');
+  const [activeTab, setActiveTab] = useState<'itinerary' | 'weather' | 'routes' | 'flights' | 'packing' | 'todos' | 'notes'>('itinerary');
   const [todoText, setTodoText] = useState('');
   const [proposals, setProposals] = useState<TripProposal[]>([]);
   const [proposalRole, setProposalRole] = useState<'owner' | 'collaborator' | null>(null);
@@ -1296,7 +1295,7 @@ function SavedTripCard({ trip, onUpdate, onDelete, isSignedIn }: { trip: SavedTr
       </div>
 
       <div className="flex overflow-x-auto scrollbar-hide border-b border-gray-200 dark:border-gray-700 -mx-4 px-4 md:mx-0 md:px-0">
-        {(['itinerary', 'weather', 'routes', 'flights', 'packing', 'todos', 'notes', 'proposals'] as const).map((tab) => (
+        {(['itinerary', 'weather', 'routes', 'flights', 'packing', 'todos', 'notes'] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -1304,14 +1303,27 @@ function SavedTripCard({ trip, onUpdate, onDelete, isSignedIn }: { trip: SavedTr
               activeTab === tab ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-600 bg-blue-50 dark:bg-blue-900/20' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/50'
             }`}
           >
-            {tab === 'flights' ? 'Flights & Docs' : tab === 'proposals' ? 'Proposals' : tab}
+            {tab === 'flights' ? 'Flights & Docs' : tab}
           </button>
         ))}
       </div>
 
       <div className="p-3 md:p-4">
         {activeTab === 'itinerary' && (
-          <ItineraryTab trip={trip} onUpdate={onUpdate} />
+          <div className="space-y-6">
+            <ItineraryTab trip={trip} onUpdate={onUpdate} />
+            <ProposalsSection
+              role={proposalRole}
+              proposals={proposals}
+              proposalInput={proposalInput}
+              setProposalInput={setProposalInput}
+              submittingProposal={submittingProposal}
+              onSubmit={submitProposal}
+              onReview={reviewProposal}
+              actionId={proposalActionId}
+              userId={user?.id}
+            />
+          </div>
         )}
 
         {activeTab === 'weather' && (
@@ -1377,13 +1389,14 @@ function SavedTripCard({ trip, onUpdate, onDelete, isSignedIn }: { trip: SavedTr
                 onChange={(e) => setTodoText(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && addTodo()}
                 placeholder="Add a to-do..."
-                className="flex-1 text-sm border border-gray-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-400"
+                className="flex-1 min-w-0 text-sm border border-gray-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-400"
               />
               <button
                 onClick={addTodo}
-                className="p-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                disabled={!todoText.trim()}
+                className="flex-shrink-0 px-4 py-2 text-sm font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1.5"
               >
-                <Plus size={16} />
+                <Plus size={15} /> Add
               </button>
             </div>
             <div className="space-y-2">
@@ -1425,20 +1438,6 @@ function SavedTripCard({ trip, onUpdate, onDelete, isSignedIn }: { trip: SavedTr
           </div>
         )}
 
-        {activeTab === 'proposals' && (
-          <ProposalsTab
-            trip={trip}
-            role={proposalRole}
-            proposals={proposals}
-            proposalInput={proposalInput}
-            setProposalInput={setProposalInput}
-            submittingProposal={submittingProposal}
-            onSubmit={submitProposal}
-            onReview={reviewProposal}
-            actionId={proposalActionId}
-            userId={user?.id}
-          />
-        )}
       </div>
     </div>
   );
