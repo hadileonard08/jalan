@@ -1544,6 +1544,11 @@ function SavedTripCard({ trip, onUpdate, onDelete, onLeave, isSignedIn, isOpen }
         body: JSON.stringify({ action }),
       });
       const data = await res.json();
+      if (!res.ok) {
+        alert(data.error || 'Failed to review this suggestion.');
+        setProposalActionId(null);
+        return;
+      }
       if (data.proposal) {
         setProposals((prev) => prev.map((p) => (p.id === proposalId ? data.proposal : p)));
       }

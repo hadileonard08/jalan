@@ -148,4 +148,76 @@ function runTest() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Regression: stops that share a prose line with other bold stops.
+//
+// Real itinerary text packs several bold stops into one sentence:
+//   "visit the iconic **Space Needle**. ... dinner at **The Pink Door** nearby."
+// Only checking the first bold span on a line silently dropped the edit while
+// the proposal was still marked accepted.
+// ---------------------------------------------------------------------------
+
+const proseItinerary = `# Seattle Itinerary — Sep 30
+
+## Day 1: Welcome to the Emerald City
+
+**🌞 Afternoon:**
+Walk over to the historic **Pike Place Market**. Grab lunch at **Pike Place Chowder**.
+
+**🌙 Evening:**
+Head up to the **Lower Queen Anne** neighborhood to visit the iconic **Space Needle**. Going up to the observation deck just before sunset gives you a breathtaking 360-degree view of the city transitioning from day to night. Afterward, enjoy a delicious, cozy dinner at **The Pink Door** nearby.
+`;
+
+const prosePatch: ItineraryPatch = {
+  edits: [
+    {
+      dayNumber: 1,
+      action: 'replace_stop',
+      targetStopName: 'Space Needle',
+      newDetails: {
+        name: "Bill Speidel's Underground Tour",
+        description: 'Explore historic Pioneer Square underground, entirely on foot.',
+      },
+    },
+  ],
+};
+
+function runProseTest() {
+  console.log('═══════════════════════════════════════════════════════════');
+  console.log('  TEST: replace_stop inside a multi-stop prose line');
+  console.log('═══════════════════════════════════════════════════════════\n');
+
+  const result = mergeItineraryPatch(proseItinerary, prosePatch);
+
+  const changed = result !== proseItinerary;
+  console.log(`  Itinerary changed: ${changed ? '✅ PASS' : '❌ FAIL (silent no-op)'}`);
+
+  const hasNew = result.includes("Bill Speidel's Underground Tour");
+  console.log(`  New stop inserted: ${hasNew ? '✅ PASS' : '❌ FAIL'}`);
+
+  const oldGone = !result.includes('**Space Needle**');
+  console.log(`  Old stop removed: ${oldGone ? '✅ PASS' : '❌ FAIL'}`);
+
+  const staleGone = !result.includes('Going up to the observation deck');
+  console.log(`  Stale description dropped: ${staleGone ? '✅ PASS' : '❌ FAIL'}`);
+
+  // Neighbouring stops on the same line must survive.
+  const neighboursKept = ['Pike Place Market', 'Pike Place Chowder', 'The Pink Door'].every((stop) =>
+    result.includes(stop)
+  );
+  console.log(`  Neighbour stops kept: ${neighboursKept ? '✅ PASS' : '❌ FAIL'}`);
+
+  const allPassed = changed && hasNew && oldGone && staleGone && neighboursKept;
+  console.log('\n═══════════════════════════════════════════════════════════');
+  console.log(`  RESULT: ${allPassed ? '✅ ALL TESTS PASSED' : '❌ SOME TESTS FAILED'}`);
+  console.log('═══════════════════════════════════════════════════════════\n');
+
+  if (!allPassed) {
+    console.log('--- Full result ---');
+    console.log(result);
+    process.exit(1);
+  }
+}
+
 runTest();
+runProseTest();

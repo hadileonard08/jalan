@@ -80,6 +80,16 @@ export async function PATCH(
     }
 
     const newItinerary = mergeItineraryPatch(currentItinerary, proposal.patchData as ItineraryPatch);
+
+    // A patch that matches nothing is a silent no-op — report it instead of
+    // marking the suggestion accepted while the itinerary stays unchanged.
+    if (newItinerary === currentItinerary) {
+      return NextResponse.json(
+        { error: 'This suggestion no longer matches the itinerary. Ask for a fresh suggestion and try again.' },
+        { status: 422 }
+      );
+    }
+
     const newPayload = { ...payload, itinerary: newItinerary };
 
     const [updatedTrip] = await db

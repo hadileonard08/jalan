@@ -54,31 +54,53 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+// All bold spans on a line. Itinerary days often pack several stops into one
+// sentence ("visit the **Space Needle**, dinner at **The Pink Door**"), so we
+// must check every span, not just the first one.
+function boldSpans(line: string): string[] {
+  return Array.from(line.matchAll(/\*\*(.+?)\*\*/g)).map((m) => m[1]);
+}
+
+// Does a bolded span refer to the requested stop? Case-insensitive, fuzzy.
+function spanMatches(bold: string, target: string): boolean {
+  const b = bold.toLowerCase().trim();
+  const t = target.toLowerCase().trim();
+  if (!b || !t) return false;
+  if (b === t) return true;
+  if (b.includes(t) || t.includes(b)) return true;
+
+  const boldWords = b.split(/\s+/).filter(Boolean);
+  const targetWords = t.split(/\s+/).filter(Boolean);
+  const overlap = targetWords.filter((w) => boldWords.includes(w)).length;
+  return overlap >= 2 || (targetWords.length > 0 && overlap / targetWords.length >= 0.5);
+}
+
 // Find a line containing a bold stop name (case-insensitive and fuzzy).
 // Returns the line index or -1.
 function findStopLine(lines: string[], stopName: string): number {
-  const lower = stopName.toLowerCase().trim();
-  const words = lower.split(/\s+/).filter(Boolean);
+  const target = stopName.toLowerCase().trim();
+  const words = target.split(/\s+/).filter(Boolean);
   let bestIdx = -1;
   let bestScore = 0;
 
   for (let i = 0; i < lines.length; i++) {
-    const boldMatch = lines[i].match(/\*\*(.+?)\*\*/);
-    if (!boldMatch) continue;
-    const bold = boldMatch[1].toLowerCase().trim();
-    const boldWords = bold.split(/\s+/).filter(Boolean);
+    const spans = boldSpans(lines[i]);
+    for (const span of spans) {
+      const bold = span.toLowerCase().trim();
 
-    // Exact match — highest priority
-    if (bold === lower) return i;
+      // Exact match — highest priority
+      if (bold === target) return i;
 
-    // Substring containment in either direction
-    if (bold.includes(lower) || lower.includes(bold)) return i;
+      // Substring containment in either direction
+      if (bold.includes(target) || target.includes(bold)) return i;
 
-    // Score by overlapping words
-    const overlap = words.filter((w) => boldWords.includes(w)).length;
-    if (overlap > bestScore) {
-      bestScore = overlap;
-      bestIdx = i;
+      // Score by overlapping words
+      const boldWords = bold.split(/\s+/).filter(Boolean);
+      const overlap = words.filter((w) => boldWords.includes(w)).length;
+      if (overlap > bestScore) {
+        bestScore = overlap;
+        bestIdx = i;
+      }
     }
   }
 
@@ -92,6 +114,54 @@ function findStopLine(lines: string[], stopName: string): number {
   return -1;
 }
 
+// Split a line into sentences, keeping trailing whitespace with each sentence.
+function splitSentences(line: string): string[] {
+  return line.match(/[^.!?]+[.!?]*\s*/g) || [line];
+}
+
+// Swap a stop's name and (optionally) the sentence describing it, without
+// destroying other stops that share the same line.
+function editStopInLine(line: string, target: string, newName: string, newDesc?: string): string {
+  const spans = Array.from(line.matchAll(/\*\*(.+?)\*\*/g));
+  const hit = spans.find((m) => spanMatches(m[1], target));
+  if (!hit) return line;
+
+  const isBullet = /^\s*[-*]\s/.test(line);
+  const isOnlyBold = spans.length === 1;
+
+  // A dedicated bullet line like "- **Space Needle** — notes" can be rewritten
+  // wholesale, since nothing else lives on it.
+  if (isBullet && isOnlyBold) {
+    const prefix = line.match(/^(\s*[-*]\s*)/)?.[1] || '- ';
+    return newDesc ? `${prefix}**${newName}** — ${newDesc}` : line.replace(hit[0], `**${newName}**`);
+  }
+
+  // Otherwise swap just this stop's name and leave neighbouring stops intact.
+  let updated = line.replace(hit[0], `**${newName}**`);
+  if (!newDesc) return updated;
+
+  // Replace the sentence that introduced the stop so it stops describing the
+  // old one, then drop any follow-up sentences that only elaborated on it.
+  const sentences = splitSentences(updated);
+  const sentenceIdx = sentences.findIndex((s) => s.includes(`**${newName}**`));
+  if (sentenceIdx === -1) return updated;
+
+  const lead = /^\s*/.exec(sentences[sentenceIdx])?.[0] || '';
+  sentences[sentenceIdx] = `${lead}Visit **${newName}** — ${newDesc} `;
+
+  let dropped = 0;
+  while (
+    dropped < 2 &&
+    sentenceIdx + 1 + dropped < sentences.length &&
+    boldSpans(sentences[sentenceIdx + 1 + dropped]).length === 0
+  ) {
+    dropped++;
+  }
+  sentences.splice(sentenceIdx + 1, dropped);
+
+  return sentences.join('');
+}
+
 // Replace a stop's name and/or description.
 function replaceStop(dayBlock: string, edit: ItineraryEdit): string {
   if (!edit.targetStopName) return dayBlock;
@@ -100,20 +170,7 @@ function replaceStop(dayBlock: string, edit: ItineraryEdit): string {
   if (idx === -1) return dayBlock;
 
   const newName = edit.newDetails?.name || edit.targetStopName;
-  const newDesc = edit.newDetails?.description;
-
-  // Preserve the existing bullet prefix (e.g. "- " or "- ")
-  const prefix = lines[idx].match(/^(\s*[-*]?\s*)/)?.[1] || '- ';
-  // Preserve existing description if not provided
-  if (newDesc) {
-    lines[idx] = `${prefix}**${newName}** — ${newDesc}`;
-  } else {
-    // Replace just the name, keep the rest of the line
-    lines[idx] = lines[idx].replace(
-      new RegExp(`\\*\\*${escapeRegex(edit.targetStopName)}\\*\\*`, 'i'),
-      `**${newName}**`
-    );
-  }
+  lines[idx] = editStopInLine(lines[idx], edit.targetStopName, newName, edit.newDetails?.description);
 
   // Also update any associated image placeholder
   if (edit.newDetails?.name) {
@@ -219,11 +276,14 @@ function updateNote(dayBlock: string, edit: ItineraryEdit): string {
   const idx = findStopLine(lines, edit.targetStopName);
   if (idx === -1) return dayBlock;
 
-  // Preserve the bullet prefix and the bold name
-  const prefix = lines[idx].match(/^(\s*[-*]?\s*)/)?.[1] || '- ';
-  const boldMatch = lines[idx].match(/\*\*(.+?)\*\*/);
-  const stopName = boldMatch ? boldMatch[1] : edit.targetStopName;
-  lines[idx] = `${prefix}**${stopName}** — ${edit.newDetails.description}`;
+  // Keep the stop's existing name (whatever bold span actually matched).
+  const hit = boldSpans(lines[idx]).find((span) => spanMatches(span, edit.targetStopName!));
+  lines[idx] = editStopInLine(
+    lines[idx],
+    edit.targetStopName,
+    hit || edit.targetStopName,
+    edit.newDetails.description
+  );
 
   return lines.join('\n');
 }
