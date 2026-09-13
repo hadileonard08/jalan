@@ -68,7 +68,8 @@ flowchart TD
     START(["START<br/>[System]"])
     END(["END<br/>[System]"])
 
-    state[("State<br/>currentItinerary · previousItineraries<br/>userPreferences · entities<br/>clarificationCount<br/>checkpointed per thread_id")]
+    state[("State<br/>currentItinerary · previousItineraries<br/>userPreferences · entities<br/>clarificationCount")]
+    checkpointer[("Checkpointer<br/>[PostgresSaver]<br/>thread_id = conversation id<br/>per-run fields cleared each turn")]
     extract["Extract<br/>[LLM Router]<br/>parse intent + entities<br/>reads currentItinerary"]
     clarify["Clarify<br/>[LLM Agent]<br/>conversational follow-up<br/>clarificationCount + 1"]
     clarifyLimit["Clarify Limit<br/>[Safe Fallback]<br/>stop asking, suggest phrasing<br/>resets clarificationCount"]
@@ -82,9 +83,13 @@ flowchart TD
     respond["Respond<br/>[Response Formatter]<br/>hydrate + assemble"]
     reject["Reject<br/>[Safe Fallback]<br/>withhold unverified draft"]
 
-    %% Entry
+    %% Entry — the thread's state is restored before Extract runs
     START --> state
     state --> extract
+
+    %% Persistence: state survives between turns, so a run can pause at END
+    state -.->|"saved after every step"| checkpointer
+    checkpointer -.->|"resumed on the next user message"| extract
 
     %% Extract routing — consolidated labels to avoid overlap
     extract -->|"greeting"| respond
@@ -590,6 +595,7 @@ scripts/
   test-refine-patch.ts       # Delta Update merger test — Days 1 & 3 unchanged when editing Day 2, plus a multi-stop prose-line regression
   test-clarify-loop.ts       # Clarify loop guard: streak counting across turns + 3-question cap (no LLM calls)
   test-checkpointer.ts       # Postgres checkpointer: reset coverage, durable state resumes, per-run state cannot leak
+  test-readme-diagram.cjs    # Renders the README Mermaid diagram in a browser to catch syntax errors
   setup-checkpointer.ts      # One-time creation of the LangGraph checkpoint tables
   test-itinerary-cleanup.ts  # Trailing follow-up question stripping for saved itineraries
   test-weather-alerts.ts     # Weather thresholds, cron auth, date targeting, snapshot building (mocked)
