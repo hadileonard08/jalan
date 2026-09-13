@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@clerk/nextjs/server';
 import { db } from '../../../../db';
-import { savedTrips, tripCollaborators, tripInvites } from '../../../../db/schema';
+import { tripCollaborators } from '../../../../db/schema';
+import { loadInvite } from '../../../../lib/invite-lookup';
 import { and, eq } from 'drizzle-orm';
 
 export const dynamic = 'force-dynamic';
@@ -11,15 +12,8 @@ function roleLabel(_role: 'owner' | 'collaborator') {
   return 'Follower';
 }
 
-async function loadInvite(token: string) {
-  const [invite] = await db.select().from(tripInvites).where(eq(tripInvites.token, token)).limit(1);
-  if (!invite) return { invite: null, trip: null, expired: false };
-  if (invite.expiresAt && invite.expiresAt.getTime() < Date.now()) {
-    return { invite, trip: null, expired: true };
-  }
-  const [trip] = await db.select().from(savedTrips).where(eq(savedTrips.id, invite.tripId)).limit(1);
-  return { invite, trip: trip || null, expired: false };
-}
+// loadInvite() lives in src/lib/invite-lookup.ts so the link-preview metadata
+// and this route share one definition.
 
 // GET /api/invites/[token] — what am I joining?
 export async function GET(_req: NextRequest, { params }: { params: { token: string } }) {
