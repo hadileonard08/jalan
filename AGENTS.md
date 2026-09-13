@@ -86,6 +86,8 @@ npx tsx scripts/smoke-test.ts
 ### Date handling
 - **Yearless dates resolve to past.** "October" without a year gets parsed as October of the current year, which may be in the past. Fixed with `normalizeImplicitPastDateRange()` in `conversation-graph.ts` — bumps the year forward until the date is >= today when no explicit year appears in the user's message.
 - **Inclusive trip duration.** End date must be `start + (durationDays - 1)`, not `start + durationDays`. A 5-day trip starting June 1 ends June 5, not June 6.
+- **The "today + 60 days" fallback invented contradicting dates.** When Extract left `startDate` empty, the fallback at `conversation-graph.ts` substituted `today + 60 days` **without checking `datesGeneral`** — so "spring 2027 to tokyo" was planned as 2026-11-12 (wrong season, wrong year), and the Critic correctly rejected it 3× for not matching the request. Two fixes: `resolveSeasonalStartDate()` turns "spring 2027" / "next winter" into real dates, and the fallback now requires `!hasStatedDateWindow(datesGeneral)` — if the user stated a window we cannot resolve, `startDate` stays empty and the router asks instead of inventing. Regression test: `npx tsx scripts/test-date-window.ts`.
+- **Reject messages hid the reason.** `rejectNode` returned a generic "could not verify" line, which blamed the itinerary while the real cause was the date substitution. It now lists the Critic's top reasons.
 
 ### Images
 - **Openverse API moved.** The old URL `api.openverse.engineering` returns a 301 redirect that hangs. The correct URL is `api.openverse.org`. Always check if external API endpoints have changed when requests start timing out.

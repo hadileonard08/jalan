@@ -618,6 +618,7 @@ scripts/
   test-clarify-loop.ts       # Clarify loop guard: streak counting across turns + 3-question cap (no LLM calls)
   test-checkpointer.ts       # Postgres checkpointer: reset coverage, durable state resumes, per-run state cannot leak
   test-interrupt-loop.ts     # interrupt()/resume mechanics: suspension, resume, pre-interrupt node does not re-run
+  test-date-window.ts        # Seasonal windows ("spring 2027") and when the date fallback may invent a date
   test-readme-diagram.cjs    # Renders the README Mermaid diagram in a browser to catch syntax errors
   setup-checkpointer.ts      # One-time creation of the LangGraph checkpoint tables
   test-itinerary-cleanup.ts  # Trailing follow-up question stripping for saved itineraries
@@ -686,6 +687,7 @@ scripts/
    npx tsx scripts/test-clarify-loop.ts
    npx tsx scripts/test-checkpointer.ts
    npx tsx scripts/test-interrupt-loop.ts
+   npx tsx scripts/test-date-window.ts
    npx tsx scripts/test-itinerary-cleanup.ts
    npx tsx scripts/test-weather-alerts.ts
    npx tsx scripts/test-route-optimization.ts

@@ -259,6 +259,13 @@ User: ${state.userMessage}
     if (parsed.durationDays && !entities.durationDays) entities.durationDays = parsed.durationDays;
   }
 
+  // A seasonal window ("spring 2027", "next winter") is a real preference the
+  // LLM can only express in words — turn it into actual dates.
+  if (!entities.startDate) {
+    const seasonal = resolveSeasonalStartDate(entities.datesGeneral || state.userMessage);
+    if (seasonal) entities.startDate = seasonal;
+  }
+
   const normalizedDates = normalizeImplicitPastDateRange(
     entities.startDate,
     entities.endDate,
@@ -300,10 +307,16 @@ User: ${state.userMessage}
 
   // For trip planning requests, default to a flexible date soon if the user didn't specify one.
   // For question/deal lookups, leave the date missing so the agent asks for it.
+  //
+  // This only fires when the user expressed no real preference. If they DID state
+  // a window we could not resolve ("spring 2027" before season parsing), leaving
+  // startDate empty routes to Clarify and asks — far better than silently
+  // planning a trip in a different season and then rejecting it.
   if (
     entities.destination &&
     !entities.startDate &&
-    (entities.intent === 'plan_trip' || entities.intent === 'refine')
+    (entities.intent === 'plan_trip' || entities.intent === 'refine') &&
+    !hasStatedDateWindow(entities.datesGeneral)
   ) {
     const fallback = new Date();
     fallback.setDate(fallback.getDate() + 60);
@@ -333,6 +346,49 @@ User: ${state.userMessage}
     // Seed the streak from prior turns so the loop guard survives requests.
     clarificationCount: countTrailingClarifications(state.history),
   };
+}
+
+// Season → a representative start date. The LLM can capture "spring 2027" as a
+// general window but cannot turn it into a calendar date. Without this, startDate
+// stayed empty and the "today + 60 days" fallback invented a date in a different
+// season *and* year, which the Critic then (correctly) rejected.
+const SEASON_START: Record<string, { month: number; day: number }> = {
+  spring: { month: 3, day: 20 },
+  summer: { month: 6, day: 21 },
+  autumn: { month: 9, day: 22 },
+  fall: { month: 9, day: 22 },
+  winter: { month: 12, day: 21 },
+};
+
+export function resolveSeasonalStartDate(text: string | undefined, today = new Date()): string | null {
+  if (!text) return null;
+  const lower = text.toLowerCase();
+  const season = Object.keys(SEASON_START).find((name) => new RegExp(`\\b${name}\\b`).test(lower));
+  if (!season) return null;
+
+  const { month, day } = SEASON_START[season];
+  const explicitYear = lower.match(/\b(20\d{2})\b/);
+  const todayUTC = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+  let year = explicitYear ? Number(explicitYear[1]) : today.getUTCFullYear();
+
+  let candidate = Date.UTC(year, month - 1, day);
+  // No year given and the season already passed this year → take next year's.
+  if (!explicitYear && candidate < todayUTC) {
+    year += 1;
+    candidate = Date.UTC(year, month - 1, day);
+  }
+  return new Date(candidate).toISOString().split('T')[0];
+}
+
+// Windows that genuinely mean "I don't care" — the only case where substituting
+// a date is safe. Anything else is a preference we must honour or ask about.
+const FLEXIBLE_WINDOW =
+  /^(flexible|any ?time|whenever|sometime|some ?time|no preference|not sure|unsure|unspecified|unknown|n\/?a)$/i;
+
+export function hasStatedDateWindow(datesGeneral?: string | null): boolean {
+  const text = (datesGeneral || '').trim();
+  if (!text) return false;
+  return !FLEXIBLE_WINDOW.test(text);
 }
 
 function parseGeneralDate(general: string, durationDays?: number): { startDate?: string; endDate?: string; durationDays?: number } {
@@ -1198,9 +1254,17 @@ function criticRouter(state: typeof ConversationStateAnnotation.State) {
   return 'generate';
 }
 
-function rejectNode() {
+function rejectNode(state: typeof ConversationStateAnnotation.State) {
+  // Surface the Critic's actual reasoning. A generic "could not verify" message
+  // hides the real cause (e.g. "the itinerary changed your requested season"),
+  // leaving the user to guess what went wrong.
+  const reasons = state.criticFeedback.slice(0, 3);
+  const detail = reasons.length
+    ? `\n\n**What held it back:**\n${reasons.map((r) => `- ${r}`).join('\n')}`
+    : '';
+
   return {
-    finalResponse: 'I could not verify this itinerary strongly enough to share it safely. Please try again so I can regenerate it with better-supported travel details.',
+    finalResponse: `I could not verify this itinerary strongly enough to share it safely.${detail}\n\nIf any of that looks wrong, tell me what to change — for example the exact dates — and I'll regenerate it.`,
   };
 }
 
