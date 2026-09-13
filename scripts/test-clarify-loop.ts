@@ -12,7 +12,7 @@
  *   npx tsx scripts/test-clarify-loop.ts
  */
 
-import { countTrailingClarifications, nextClarifyRoute } from '../src/agents/conversation-graph';
+import { conversationGraph, countTrailingClarifications, nextClarifyRoute } from '../src/agents/conversation-graph';
 import type { PersistedMessage } from '../src/lib/chat-state';
 
 let failures = 0;
@@ -83,6 +83,20 @@ function run() {
     countTrailingClarifications([ask(), reply(), ask(), reply(), plan(), reply(), plan()]),
     0
   );
+
+  // Structural guarantees: a reply to a clarification re-enters Extract because
+  // every run starts there, and Clarify/ClarifyLimit both end the run (pause).
+  console.log('\nGraph wiring:');
+  const graph = (conversationGraph as any).getGraph();
+  const hasEdge = (source: string, target: string) =>
+    graph.edges.some((e: any) => e.source === source && e.target === target);
+
+  check('START -> Extract (every turn re-enters Extract)', hasEdge('__start__', 'extract'), true);
+  check('Extract can branch to Clarify', hasEdge('extract', 'clarify'), true);
+  check('Extract can branch to ClarifyLimit', hasEdge('extract', 'clarifyLimit'), true);
+  check('Clarify ends the run (state pauses)', hasEdge('clarify', '__end__'), true);
+  check('ClarifyLimit ends the run', hasEdge('clarifyLimit', '__end__'), true);
+  check('Gather -> Generate (planning clears the streak)', hasEdge('gather', 'generate'), true);
 
   console.log('\n═══════════════════════════════════════════════════════════');
   console.log(failures === 0 ? '  RESULT: ✅ ALL TESTS PASSED' : `  RESULT: ❌ ${failures} FAILED`);
