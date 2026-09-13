@@ -71,7 +71,7 @@ flowchart TD
     state[("State — persisted by the Postgres checkpointer<br/>thread_id = conversation.id<br/>durable: currentItinerary · previousItineraries · clarificationCount<br/>per-run fields cleared on entry")]
     extract["Extract<br/>[LLM Router]<br/>parse intent + entities<br/>reads currentItinerary"]
     clarifyAsk["Clarify Ask<br/>[LLM Agent]<br/>writes the follow-up question"]
-    clarify["Clarify<br/>[Interrupt]<br/>suspends the run<br/>waits for the reply<br/>clarificationCount + 1"]
+    clarify["Clarify<br/>[Interrupt]<br/>suspends the run<br/>waits for the reply<br/>clarificationCount + 1 (on resume)"]
     clarifyLimit["Clarify Limit<br/>[Safe Fallback]<br/>stop asking, suggest phrasing<br/>resets clarificationCount"]
     gather["Gather<br/>[Tool Integration]<br/>weather + news + deals + images"]
     generate["Generate<br/>[LLM Generator]<br/>itinerary + packing + transport"]
@@ -109,7 +109,7 @@ flowchart TD
     %% resumes it straight back into Extract — up to MAX_CLARIFICATIONS = 3 in a
     %% row, after which the router diverts to Clarify Limit.
     clarifyAsk --> clarify
-    clarify --> extract
+    clarify -->|"after reply: re-evaluate in Extract"| extract
     clarify -.->|"question shown · run suspends"| userReply
     userReply -.->|"reply resumes the node"| clarify
 

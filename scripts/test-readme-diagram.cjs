@@ -56,9 +56,14 @@ const puppeteer = require('puppeteer');
     hasInterruptNode: (document.querySelector('#out svg')?.textContent || '').includes('suspends the run'),
     hasQuestionOutEdge: (document.querySelector('#out svg')?.textContent || '').includes('question shown'),
     hasResumeEdge: (document.querySelector('#out svg')?.textContent || '').includes('reply resumes the node'),
+    hasReevaluateEdge: (document.querySelector('#out svg')?.textContent || '').includes('after reply: re-evaluate in Extract'),
+    hasResumeCountLabel: (document.querySelector('#out svg')?.textContent || '').includes('clarificationCount + 1 (on resume)'),
   }));
 
   console.log(JSON.stringify(result, null, 2));
   await browser.close();
-  if (!result.ok) process.exit(1);
+  const missingLabels = Object.entries(result).some(([key, value]) =>
+    key.startsWith('has') && key !== 'hasSeparateCheckpointerNode' && value !== true
+  );
+  if (!result.ok || missingLabels || result.hasSeparateCheckpointerNode) process.exit(1);
 })().catch((err) => { console.error('FAILED:', err.message); process.exit(1); });
