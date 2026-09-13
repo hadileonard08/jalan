@@ -7,6 +7,7 @@ import {
   MapPin, Calendar, Map, Bell, ThumbsUp, ThumbsDown, MessageSquare,
   FileText, Upload, Download, Hotel, Train, Car, ChevronDown, ChevronUp,
   AlertTriangle, Sparkles, UserCog, UserPlus, Link2, Check, LogOut,
+  List, Sun, Briefcase,
 } from 'lucide-react';
 import { useUser } from '@/components/AuthProvider';
 import type {
@@ -401,6 +402,92 @@ function DayFeedbackBar({
   );
 }
 
+// --- Per-day collaboration column ---
+// Desktop shows it inline next to the day; mobile collapses it behind a summary
+// row so a long itinerary stays readable on a small screen.
+
+function DayPanel({
+  day,
+  trip,
+  onUpdate,
+  proposalRole,
+  proposals,
+  submittingDay,
+  onSubmitProposal,
+  onReviewProposal,
+  onEditProposal,
+  onWithdrawProposal,
+  proposalActionId,
+  userId,
+}: {
+  day: number;
+  trip: SavedTrip;
+  onUpdate: (trip: SavedTrip) => void;
+  proposalRole: TripRole | null;
+  proposals: TripProposal[];
+  submittingDay: number | null;
+  onSubmitProposal: (day: number, prompt: string) => Promise<boolean>;
+  onReviewProposal: (proposalId: string, action: 'accept' | 'reject') => void;
+  onEditProposal: (proposalId: string, prompt: string) => Promise<boolean>;
+  onWithdrawProposal: (proposalId: string) => void;
+  proposalActionId: string | null;
+  userId?: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const fb = getDayFeedback(trip, day);
+  const pendingCount = proposals.filter((p) => p.status === 'pending').length;
+
+  return (
+    <div className="md:col-span-1 md:sticky md:top-4 md:self-start rounded-xl border border-gray-100 dark:border-gray-700/50 p-3 bg-gray-50/50 dark:bg-gray-800/30">
+      <div className="hidden md:block text-[13px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">
+        Day {day}
+      </div>
+
+      {/* Mobile summary + toggle */}
+      <button
+        onClick={() => setExpanded((prev) => !prev)}
+        className="md:hidden w-full min-h-[44px] flex items-center justify-between gap-2 text-left"
+        aria-expanded={expanded}
+      >
+        <span className="flex items-center gap-2.5 text-[13px] text-gray-500 dark:text-gray-400">
+          <span className="font-semibold uppercase tracking-wide">Day {day}</span>
+          <span className="flex items-center gap-1">
+            <ThumbsUp size={13} /> {fb.thumbsUp}
+          </span>
+          <span className="flex items-center gap-1">
+            <MessageSquare size={13} /> {fb.comments.length}
+          </span>
+          {pendingCount > 0 && (
+            <span className="flex items-center gap-1 text-amber-600 dark:text-amber-400">
+              <UserCog size={13} /> {pendingCount}
+            </span>
+          )}
+        </span>
+        <span className="flex items-center gap-1 text-[12px] font-medium text-blue-600 dark:text-blue-400 flex-shrink-0">
+          {expanded ? 'Hide' : 'Collaborate'}
+          {expanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+        </span>
+      </button>
+
+      <div className={`${expanded ? 'block' : 'hidden'} md:block mt-2 md:mt-0`}>
+        <DayFeedbackBar dayIndex={day} trip={trip} onUpdate={onUpdate} />
+        <DayProposalBox
+          day={day}
+          role={proposalRole}
+          proposals={proposals}
+          submitting={submittingDay === day}
+          onSubmit={onSubmitProposal}
+          onReview={onReviewProposal}
+          onEdit={onEditProposal}
+          onWithdraw={onWithdrawProposal}
+          actionId={proposalActionId}
+          userId={userId}
+        />
+      </div>
+    </div>
+  );
+}
+
 // --- Itinerary tab with per-day feedback ---
 
 function ItineraryTab({
@@ -471,24 +558,20 @@ function ItineraryTab({
             <div className="md:col-span-2 prose prose-sm dark:prose-invert max-w-none text-gray-700 dark:text-gray-300">
               <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{content}</ReactMarkdown>
             </div>
-            <div className="md:col-span-1 md:sticky md:top-4 md:self-start rounded-xl border border-gray-100 dark:border-gray-700/50 p-3 bg-gray-50/50 dark:bg-gray-800/30">
-              <div className="text-[13px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">
-                Day {day}
-              </div>
-              <DayFeedbackBar dayIndex={day} trip={trip} onUpdate={onUpdate} />
-              <DayProposalBox
-                day={day}
-                role={proposalRole}
-                proposals={proposals.filter((proposal) => proposalDays(proposal).includes(day))}
-                submitting={submittingDay === day}
-                onSubmit={onSubmitProposal}
-                onReview={onReviewProposal}
-                onEdit={onEditProposal}
-                onWithdraw={onWithdrawProposal}
-                actionId={proposalActionId}
-                userId={userId}
-              />
-            </div>
+            <DayPanel
+              day={day}
+              trip={trip}
+              onUpdate={onUpdate}
+              proposalRole={proposalRole}
+              proposals={proposals.filter((proposal) => proposalDays(proposal).includes(day))}
+              submittingDay={submittingDay}
+              onSubmitProposal={onSubmitProposal}
+              onReviewProposal={onReviewProposal}
+              onEditProposal={onEditProposal}
+              onWithdrawProposal={onWithdrawProposal}
+              proposalActionId={proposalActionId}
+              userId={userId}
+            />
           </div>
         )
       )}
@@ -1374,7 +1457,7 @@ function PendingSuggestionsModal({
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/40" onClick={onClose} />
-      <div className="relative w-full max-w-lg max-h-[85vh] overflow-y-auto rounded-[20px] border border-black/[0.05] dark:border-white/[0.1] bg-white dark:bg-[#2c2c2e] shadow-[0_20px_70px_rgba(0,0,0,0.2)] p-5 space-y-3">
+      <div className="relative w-full max-w-lg max-h-[85dvh] overflow-y-auto overscroll-contain rounded-[20px] border border-black/[0.05] dark:border-white/[0.1] bg-white dark:bg-[#2c2c2e] shadow-[0_20px_70px_rgba(0,0,0,0.2)] p-4 md:p-5 space-y-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 font-semibold text-gray-900 dark:text-gray-100">
             <UserCog size={18} className="text-amber-600" /> Waiting for approval ({proposals.length})
@@ -1474,7 +1557,7 @@ function TripSharingModal({ trip, onClose }: { trip: SavedTrip; onClose: () => v
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/40" onClick={onClose} />
-      <div className="relative w-full max-w-md max-h-[85vh] overflow-y-auto rounded-[20px] border border-black/[0.05] dark:border-white/[0.1] bg-white dark:bg-[#2c2c2e] shadow-[0_20px_70px_rgba(0,0,0,0.2)] p-5 space-y-4">
+      <div className="relative w-full max-w-md max-h-[85dvh] overflow-y-auto overscroll-contain rounded-[20px] border border-black/[0.05] dark:border-white/[0.1] bg-white dark:bg-[#2c2c2e] shadow-[0_20px_70px_rgba(0,0,0,0.2)] p-4 md:p-5 space-y-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 font-semibold text-gray-900 dark:text-gray-100">
             <UserPlus size={18} className="text-blue-600" /> Invite to {trip.destination || 'trip'}
@@ -1586,9 +1669,23 @@ function TripSharingModal({ trip, onClose }: { trip: SavedTrip; onClose: () => v
 
 // --- SavedTripCard ---
 
+type TripTab = 'itinerary' | 'weather' | 'routes' | 'flights' | 'packing' | 'todos' | 'notes';
+
+// Short labels keep more tabs visible at once on a phone.
+const TRIP_TABS: { key: TripTab; label: string; icon: typeof Plane }[] = [
+  { key: 'itinerary', label: 'Plan', icon: List },
+  { key: 'weather', label: 'Weather', icon: Sun },
+  { key: 'routes', label: 'Routes', icon: Map },
+  { key: 'flights', label: 'Bookings', icon: Plane },
+  { key: 'packing', label: 'Packing', icon: Briefcase },
+  { key: 'todos', label: 'To-dos', icon: CheckSquare },
+  { key: 'notes', label: 'Notes', icon: StickyNote },
+];
+
 function SavedTripCard({ trip, onUpdate, onDelete, onLeave, onPayloadRefresh, isSignedIn, isOpen }: { trip: SavedTrip; onUpdate: (trip: SavedTrip) => void; onDelete?: () => void; onLeave?: () => void; onPayloadRefresh: (tripId: string, payload: ChatPayload) => void; isSignedIn: boolean; isOpen: boolean }) {
   const { user } = useUser();
-  const [activeTab, setActiveTab] = useState<'itinerary' | 'weather' | 'routes' | 'flights' | 'packing' | 'todos' | 'notes'>('itinerary');
+  const [activeTab, setActiveTab] = useState<TripTab>('itinerary');
+  const tabBarRef = useRef<HTMLDivElement>(null);
   const [todoText, setTodoText] = useState('');
   const [noteText, setNoteText] = useState('');
   const [proposals, setProposals] = useState<TripProposal[]>([]);
@@ -1637,6 +1734,12 @@ function SavedTripCard({ trip, onUpdate, onDelete, onLeave, onPayloadRefresh, is
   }, [trip.id, trip.payload.itinerary, isSignedIn, isOpen, onPayloadRefresh]);
 
   const pendingProposals = proposals.filter((p) => p.status === 'pending');
+
+  // Keep the selected tab in view when the tab bar is wider than the screen.
+  useEffect(() => {
+    const active = tabBarRef.current?.querySelector('[data-tab-active="true"]') as HTMLElement | null;
+    active?.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+  }, [activeTab]);
 
   // day is passed so the AI targets that day; the stored prompt stays as typed.
   const submitProposal = async (day: number, prompt: string): Promise<boolean> => {
@@ -1772,9 +1875,11 @@ function SavedTripCard({ trip, onUpdate, onDelete, onLeave, onPayloadRefresh, is
   const payload = trip.payload;
 
   return (
-    <div className="border border-black/[0.05] dark:border-white/[0.1] rounded-[20px] bg-white dark:bg-[#2c2c2e] shadow-[0_8px_30px_rgba(0,0,0,0.08)] overflow-hidden">
+    // overflow-clip (not hidden) so the sticky tab bar can stick to the page
+    // scroller instead of being trapped in a non-scrolling container.
+    <div className="border border-black/[0.05] dark:border-white/[0.1] rounded-[20px] bg-white dark:bg-[#2c2c2e] shadow-[0_8px_30px_rgba(0,0,0,0.08)] overflow-clip">
       {trip.weatherAlert && (
-        <div className="flex items-start gap-2.5 bg-amber-50 dark:bg-amber-900/20 border-b border-amber-200 dark:border-amber-800/40 px-4 py-3">
+        <div className="flex items-start gap-2.5 bg-amber-50 dark:bg-amber-900/20 border-b border-amber-200 dark:border-amber-800/40 px-4 py-3 rounded-t-[20px]">
           <AlertTriangle size={18} className="text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
           <div className="min-w-0 text-[13px] leading-snug text-amber-800 dark:text-amber-200">
             <span className="font-semibold">Weather alert</span>
@@ -1782,7 +1887,7 @@ function SavedTripCard({ trip, onUpdate, onDelete, onLeave, onPayloadRefresh, is
           </div>
         </div>
       )}
-      <div className="p-4 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 flex items-start justify-between gap-3">
+      <div className={`p-3 md:p-4 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 flex items-start justify-between gap-2 md:gap-3 ${trip.weatherAlert ? '' : 'rounded-t-[20px]'}`}>
         <div className="min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <div className="flex items-center gap-2 font-semibold text-gray-900 dark:text-gray-100">
@@ -1819,55 +1924,69 @@ function SavedTripCard({ trip, onUpdate, onDelete, onLeave, onPayloadRefresh, is
             </div>
           )}
         </div>
-        <div className="flex items-center gap-1 flex-shrink-0">
+        <div className="flex items-center gap-0.5 md:gap-1 flex-shrink-0">
           <button
             onClick={copyToClipboard}
-            className="text-gray-400 dark:text-gray-500 hover:text-blue-600 p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+            className="text-gray-400 dark:text-gray-500 hover:text-blue-600 w-10 h-10 md:w-auto md:h-auto md:p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center justify-center"
             title="Copy trip summary"
+            aria-label="Copy trip summary"
           >
-            <Clipboard size={16} />
+            <Clipboard size={18} className="md:hidden" />
+            <Clipboard size={16} className="hidden md:block" />
           </button>
           {canReviewRole(proposalRole) && (
             <button
               onClick={() => setSharingOpen(true)}
-              className="text-gray-400 dark:text-gray-500 hover:text-blue-600 p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+              className="text-gray-400 dark:text-gray-500 hover:text-blue-600 w-10 h-10 md:w-auto md:h-auto md:p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center justify-center"
               title="Invite people to this trip"
+              aria-label="Invite people to this trip"
             >
-              <UserPlus size={16} />
+              <UserPlus size={18} className="md:hidden" />
+              <UserPlus size={16} className="hidden md:block" />
             </button>
           )}
           {proposalRole && proposalRole !== 'owner' && onLeave ? (
             <button
               onClick={onLeave}
-              className="text-gray-400 dark:text-gray-500 hover:text-red-600 p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+              className="text-gray-400 dark:text-gray-500 hover:text-red-600 w-10 h-10 md:w-auto md:h-auto md:p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center justify-center"
               title="Leave this trip"
+              aria-label="Leave this trip"
             >
-              <LogOut size={16} />
+              <LogOut size={18} className="md:hidden" />
+              <LogOut size={16} className="hidden md:block" />
             </button>
           ) : (
             onDelete && (
               <button
                 onClick={onDelete}
-                className="text-gray-400 dark:text-gray-500 hover:text-red-600 p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                className="text-gray-400 dark:text-gray-500 hover:text-red-600 w-10 h-10 md:w-auto md:h-auto md:p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center justify-center"
                 title="Delete trip"
+                aria-label="Delete trip"
               >
-                <Trash2 size={16} />
+                <Trash2 size={18} className="md:hidden" />
+                <Trash2 size={16} className="hidden md:block" />
               </button>
             )
           )}
         </div>
       </div>
 
-      <div className="flex overflow-x-auto scrollbar-hide border-b border-gray-200 dark:border-gray-700 -mx-4 px-4 md:mx-0 md:px-0">
-        {(['itinerary', 'weather', 'routes', 'flights', 'packing', 'todos', 'notes'] as const).map((tab) => (
+      <div
+        ref={tabBarRef}
+        className="sticky top-0 z-10 flex overflow-x-auto scrollbar-hide border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-[#2c2c2e] -mx-4 px-4 md:mx-0 md:px-0"
+      >
+        {TRIP_TABS.map(({ key, label, icon: Icon }) => (
           <button
-            key={tab}
-            onClick={() => setActiveTab(tab)}
-            className={`flex-shrink-0 px-4 py-3 md:py-2 md:flex-1 text-[13px] font-medium capitalize whitespace-nowrap min-h-[44px] flex items-center justify-center ${
-              activeTab === tab ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-600 bg-blue-50 dark:bg-blue-900/20' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/50'
+            key={key}
+            onClick={() => setActiveTab(key)}
+            data-tab-active={activeTab === key}
+            aria-current={activeTab === key}
+            className={`flex-shrink-0 px-3 md:px-4 py-2 md:py-2 md:flex-1 text-[13px] font-medium whitespace-nowrap min-h-[48px] flex items-center justify-center gap-1.5 ${
+              activeTab === key ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-600 bg-blue-50 dark:bg-blue-900/20' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/50'
             }`}
           >
-            {tab === 'flights' ? 'Flights & Docs' : tab}
+            <Icon size={15} className="flex-shrink-0" />
+            {label}
           </button>
         ))}
       </div>
@@ -2240,6 +2359,8 @@ export default function OneStopPanel({ isOpen, onClose, savedTrips, setSavedTrip
         }`}
       >
         <div
+          // Keep content clear of the notch and the home indicator on phones.
+          style={{ paddingTop: 'env(safe-area-inset-top)', paddingBottom: 'env(safe-area-inset-bottom)' }}
           className={`w-full h-[100dvh] max-w-none max-h-none bg-white dark:bg-[#1c1c1e] flex flex-col transform transition-all duration-300 ease-out overflow-hidden ${
             isOpen ? 'translate-y-0 opacity-100' : 'translate-y-4 opacity-0'
           }`}
@@ -2253,7 +2374,7 @@ export default function OneStopPanel({ isOpen, onClose, savedTrips, setSavedTrip
                 <div className="flex gap-1 ml-2">
                   <button
                     onClick={() => setView('trips')}
-                    className={`px-3 py-1 text-[13px] font-medium rounded-lg transition-colors ${
+                    className={`min-h-[40px] md:min-h-0 px-3.5 md:px-3 py-1 text-[13px] font-medium rounded-lg transition-colors ${
                       view === 'trips'
                         ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300'
                         : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'
@@ -2263,7 +2384,7 @@ export default function OneStopPanel({ isOpen, onClose, savedTrips, setSavedTrip
                   </button>
                   <button
                     onClick={() => setView('alerts')}
-                    className={`px-3 py-1 text-[13px] font-medium rounded-lg transition-colors flex items-center gap-1 ${
+                    className={`min-h-[40px] md:min-h-0 px-3.5 md:px-3 py-1 text-[13px] font-medium rounded-lg transition-colors flex items-center gap-1 ${
                       view === 'alerts'
                         ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300'
                         : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'
@@ -2457,19 +2578,33 @@ export default function OneStopPanel({ isOpen, onClose, savedTrips, setSavedTrip
           ) : (
             /* --- Trips View (multiple trips) --- */
             <>
-              {/* Mobile trip selector dropdown (hidden on desktop) */}
-              <div className="md:hidden px-4 py-2 border-b border-gray-100 dark:border-gray-800 flex-shrink-0">
-                <select
-                  value={activeTrip?.id || ''}
-                  onChange={(e) => setActiveTripId(e.target.value)}
-                  className="w-full text-sm font-medium border border-gray-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 rounded-lg px-3 py-2.5 focus:outline-none focus:border-blue-400"
-                >
-                  {savedTrips.map((trip) => (
-                    <option key={trip.id} value={trip.id}>
-                      {trip.destination || 'Trip'} — {trip.dates || 'Dates TBD'}
-                    </option>
-                  ))}
-                </select>
+              {/* Mobile trip selector — scrollable chips instead of a dropdown */}
+              <div className="md:hidden border-b border-gray-100 dark:border-gray-800 flex-shrink-0">
+                <div className="flex gap-2 overflow-x-auto scrollbar-hide px-4 py-2.5">
+                  {savedTrips.map((trip) => {
+                    const isActive = activeTrip?.id === trip.id;
+                    return (
+                      <button
+                        key={trip.id}
+                        onClick={() => setActiveTripId(trip.id)}
+                        aria-current={isActive}
+                        className={`flex-shrink-0 min-h-[44px] rounded-2xl border px-3.5 py-2 text-left transition-colors ${
+                          isActive
+                            ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/25'
+                            : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-[#2c2c2e]'
+                        }`}
+                      >
+                        <div className={`flex items-center gap-1.5 text-[13px] font-semibold ${isActive ? 'text-blue-700 dark:text-blue-300' : 'text-gray-800 dark:text-gray-200'}`}>
+                          <MapPin size={12} className={isActive ? 'text-blue-600 dark:text-blue-400' : 'text-gray-400'} />
+                          {trip.destination || 'Trip'}
+                        </div>
+                        <div className="text-[11px] text-gray-400 dark:text-gray-500 mt-0.5 truncate max-w-[140px]">
+                          {trip.dates || 'Dates TBD'}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
 
               <div className="flex-1 flex overflow-hidden">
