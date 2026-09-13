@@ -458,7 +458,9 @@ A sign-in-gated full-page view accessible from the left sidebar that lets users:
 - **Live propagation** — accepted changes reach other collaborators' open panels within ~30 seconds, and instantly when they reopen One Stop.
 
 ### Mobile-optimized
-- **One Stop panel** — full-page view on every breakpoint, native trip-selector dropdown, horizontally scrollable tabs with 44px touch targets, responsive form grids, no horizontal page scroll.
+- **One Stop panel** — full-page view on every breakpoint, horizontally scrollable trip **chips** showing destination and dates, sticky tab bar with icons and short labels (the active tab scrolls itself into view), 48px tabs and 40px header action buttons, responsive form grids, no horizontal page scroll.
+- **Collapsible day panels** — each day's collaboration block (thumbs, comments, suggest-a-change) collapses behind a summary row (`DAY 1 · 👍 2 · 💬 3 · Collaborate`) on phones so a long itinerary stays readable; desktop keeps it inline.
+- **Safe-area aware** — the panel respects `env(safe-area-inset-*)` for notches and home indicators, and modals use `dvh` sizing with contained overscroll.
 - No horizontal scroll — all content fits within the viewport.
 - Images and tables scroll within their containers, not the page.
 - Auto-scroll to top when itinerary finishes generating.
@@ -683,6 +685,6 @@ scripts/
 - Integrated **Clerk authentication** with anonymous session merging and sign-in-gated features.
 - Added **vague message handling** — when users send unclear messages, the agent asks warm, conversational follow-ups with example trip ideas.
 - Used **chrono-node** for flexible natural-language date parsing (e.g. *"in two weeks"*, *"next October"*, *"2 week trip"*).
-- Optimized **mobile experience** — full-page One Stop on every breakpoint, native trip-selector dropdown, horizontally scrollable tabs with 44px touch targets, no horizontal page scroll, auto-scroll to top on itinerary completion, responsive layout with mobile sidebar drawer, floating section navigator button.
+- Optimized **mobile experience** — full-page One Stop on every breakpoint, scrollable trip chips, sticky tab bar with icons and auto-scrolled active tab, 48px tabs and 40px action buttons, collapsible per-day collaboration panels, safe-area insets for notches and home indicators, no horizontal page scroll, auto-scroll to top on itinerary completion, responsive layout with mobile sidebar drawer, floating section navigator button.
 - Implemented **local and post-deploy smoke tests** with 46 assertions covering date safety, exact duration, explicit past-date rejection, RAG-sensitive chat quality, routes, transport, images, deals, and Wikipedia landmark verification.
 - Added **local image testing script** (`scripts/test-images.ts`) for testing image fetching without consuming Gemini tokens.
