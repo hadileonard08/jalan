@@ -44,10 +44,13 @@ const puppeteer = require('puppeteer');
     ok: window.__ok,
     err: window.__err,
     nodeCount: document.querySelectorAll('#out svg .node').length,
-    hasCheckpointer: (document.querySelector('#out svg')?.textContent || '').includes('Checkpointer'),
+    hasUnifiedStateStore: (document.querySelector('#out svg')?.textContent || '').includes('persisted by the Postgres checkpointer'),
     hasClarifyLimit: (document.querySelector('#out svg')?.textContent || '').includes('Clarify Limit'),
     hasGuardEdge: (document.querySelector('#out svg')?.textContent || '').includes('after 3 questions in a row'),
-    hasStateRestoreEdge: (document.querySelector('#out svg')?.textContent || '').includes('thread state restored'),
+    hasStateRestoreEdge: (document.querySelector('#out svg')?.textContent || '').includes('restored across the request boundary'),
+    // Guards against the checkpointer creeping back in as its own node.
+    hasSeparateCheckpointerNode: (document.querySelectorAll('#out svg .node').length > 0) &&
+      Array.from(document.querySelectorAll('#out svg .node')).some((n) => /^Checkpointer\b/.test((n.textContent || '').trim())),
     hasUserReplyBox: (document.querySelector('#out svg')?.textContent || '').includes('Language State Machine'),
     hasClarifyAsk: (document.querySelector('#out svg')?.textContent || '').includes('Clarify Ask'),
     hasInterruptNode: (document.querySelector('#out svg')?.textContent || '').includes('suspends the run'),

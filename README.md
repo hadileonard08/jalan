@@ -68,8 +68,7 @@ flowchart TD
     START(["START<br/>[System]"])
     END(["END<br/>[System]"])
 
-    state[("State<br/>currentItinerary · previousItineraries<br/>userPreferences · entities<br/>clarificationCount")]
-    checkpointer[("Checkpointer<br/>[PostgresSaver]<br/>thread_id = conversation id<br/>per-run fields cleared each turn")]
+    state[("State — persisted by the Postgres checkpointer<br/>thread_id = conversation.id<br/>durable: currentItinerary · previousItineraries · clarificationCount<br/>per-run fields cleared on entry")]
     extract["Extract<br/>[LLM Router]<br/>parse intent + entities<br/>reads currentItinerary"]
     clarifyAsk["Clarify Ask<br/>[LLM Agent]<br/>writes the follow-up question"]
     clarify["Clarify<br/>[Interrupt]<br/>suspends the run<br/>waits for the reply<br/>clarificationCount + 1"]
@@ -89,9 +88,9 @@ flowchart TD
     START --> state
     state --> extract
 
-    %% Persistence: state survives between turns, so a run can pause at END
-    state -.->|"saved after every step"| checkpointer
-    checkpointer -.->|"thread state restored"| userReply
+    %% Persistence: the checkpointer saves state after every step (when one is
+    %% configured), so a suspended run continues on the next request.
+    state -.->|"restored across the request boundary"| userReply
 
     %% Extract routing — consolidated labels to avoid overlap
     extract -->|"greeting"| respond

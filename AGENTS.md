@@ -119,9 +119,17 @@ npx tsx scripts/smoke-test.ts
 ## Architecture Overview
 
 ```
+State is persisted by the Postgres checkpointer per conversation
+(thread_id = conversation.id), so a suspended run continues on the next request.
+
 User message
-  -> Extract (entity extraction, date normalization)
-  -> Clarify (if missing fields) | ClarifyLimit (after 3 in a row) | Answer (if question) | Gather (if trip plan)
+  -> Extract (entity extraction, date normalization, per-run state reset)
+  -> Clarify Ask -> Clarify [interrupt, suspends the run]
+       ^                        |
+       |    (user's next message resumes it)
+       +------------------------+
+     loop guard: after 3 in a row -> ClarifyLimit
+  -> Answer (if question) | Gather (if trip plan)
 
 Gather (one-time: weather, news, deals, destination image)
   -> Generate (itinerary + packing tips, retryable)
