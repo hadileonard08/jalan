@@ -155,6 +155,13 @@ Gather (one-time: weather, news, deals, destination image)
 - `MAX_CLARIFICATIONS = 3`: after three consecutive questions `routeAfterExtract` diverts to `clarifyLimit`, which returns a concrete "here's how to phrase it" message, resets the count to 0, and *does* end the run. `Gather` also resets to 0 once the trip is actually being planned.
 - Tests (no LLM calls): `npx tsx scripts/test-clarify-loop.ts` (streak counting, 3-question cap, graph wiring incl. the in-graph loop), `npx tsx scripts/test-checkpointer.ts` (reset coverage across all 26 state keys, durable state survives a second run, per-run state cannot leak, threads isolated), and `npx tsx scripts/test-interrupt-loop.ts` (a node suspends mid-graph, the pending interrupt is readable, `Command({resume, update})` continues it, and the pre-interrupt node does not re-run).
 
+### Approved-edit enrichment refresh
+- Accepting a proposal used to patch **only** `payload.itinerary`, so the day's hero image, `routeLinks`, `transportPlan` waypoints/polyline, and the transport notes inside the text all kept describing the *old* stop. An approved "Space Needle → Bill Speidel's Underground Tour" left a Space Needle photo, map route, and Google Maps link on the page.
+- `src/lib/refresh-enrichment.ts` rebuilds those for the affected days only, wired into the accept handler (best-effort — a failing refresh must never fail the approval). `affectedDaysFromPatch()` reads `edits[].dayNumber`, using `newDetails.name` as the image hint.
+- **It must be targeted, not a re-run of enrichment.** `hydrateItineraryImages()` re-inserts a placeholder for any day without an `![IMAGE:` marker — i.e. every already-hydrated day — so re-running it adds a second image per day. `injectTransportNotes()` appends, so it would duplicate notes; `stripTransportNotes()` removes the old one first. `buildTransportPlan(..., { skipCityTips: true })` avoids an LLM call for tips that are reused from the existing plan.
+- Backfill for trips edited before this existed: `npx tsx scripts/backfill-enrichment.ts [--dry-run] [destination]`. It targets days via `staleImageDays()` (a hero image whose caption names a stop that no longer exists). A transport-based staleness check was tried and **dropped** — a stale note contains the old stop names itself, so it both masked real staleness and flagged untouched days.
+- Test: `npx tsx scripts/test-refresh-enrichment.ts` (no network).
+
 ### Enrichment pipeline (post-approval)
 - **Transport:** Geocode stops via Nominatim (cached), route via OSRM (walking + driving in parallel), LLM transit tips.
 - **Images:** Race 4 providers in parallel (Wikimedia Commons, Wikipedia, Openverse, Pexels) per term. 3 term variants per landmark. In-memory cache.

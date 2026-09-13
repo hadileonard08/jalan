@@ -6,6 +6,7 @@ import { generateItineraryPatch, mergeItineraryPatch } from '../../../../../../a
 import type { ItineraryPatch } from '../../../../../../lib/chat-state';
 import { getTripAccess, isOwnerLevel } from '../../../../../../lib/trip-access';
 import { serializeSavedTrip } from '../../../../../../lib/serialize-trip';
+import { refreshEnrichment, affectedDaysFromPatch } from '../../../../../../lib/refresh-enrichment';
 import { eq, and } from 'drizzle-orm';
 
 export const dynamic = 'force-dynamic';
@@ -98,7 +99,22 @@ export async function PATCH(
       );
     }
 
-    const newPayload = { ...payload, itinerary: newItinerary };
+    // An approved edit changes the *stops*, so the parts of the trip that
+    // describe them must be rebuilt: the day's hero image, its route link, its
+    // map waypoints, and the transport notes inside the text. Best-effort — the
+    // text change is what the user approved, so a slow or failing enrichment
+    // must never fail the approval.
+    const patch = proposal.patchData as ItineraryPatch;
+    let newPayload = { ...payload, itinerary: newItinerary };
+    try {
+      newPayload = await refreshEnrichment(
+        newPayload,
+        trip.destination || '',
+        affectedDaysFromPatch(patch),
+      );
+    } catch (error) {
+      console.warn('[Proposal] enrichment refresh failed, keeping the patched text:', error);
+    }
 
     const [updatedTrip] = await db
       .update(savedTrips)

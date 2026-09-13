@@ -676,7 +676,9 @@ Keep it concise and practical. Use markdown. Only include real, well-known optio
 export async function buildTransportPlan(
   routeLinks: RouteLink[],
   destination: string,
-  itinerary?: string
+  itinerary?: string,
+  // Partial refreshes reuse the existing city tips, so they can skip the LLM call.
+  options?: { skipCityTips?: boolean }
 ): Promise<TransportPlan | null> {
   if (!routeLinks || routeLinks.length === 0 || !destination) return null;
 
@@ -703,7 +705,9 @@ export async function buildTransportPlan(
 
   // Generate city-level transit tips concurrently — no need to wait since
   // the day transports are already resolved.
-  const { tips, costs } = await generateCityTransitTips(destination, dayTransports);
+  const { tips, costs } = options?.skipCityTips
+    ? { tips: '', costs: '' }
+    : await generateCityTransitTips(destination, dayTransports);
 
   return {
     cityTransitTips: tips,
