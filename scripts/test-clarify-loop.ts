@@ -52,9 +52,9 @@ function run() {
   check('questions before a plan do not carry over', countTrailingClarifications([ask(), ask(), plan(), reply()]), 0);
 
   console.log('\nRouter decision (limit = 3):');
-  check('0 asked -> ask', nextClarifyRoute(0), 'clarify');
-  check('1 asked -> ask', nextClarifyRoute(1), 'clarify');
-  check('2 asked -> ask', nextClarifyRoute(2), 'clarify');
+  check('0 asked -> ask', nextClarifyRoute(0), 'clarifyAsk');
+  check('1 asked -> ask', nextClarifyRoute(1), 'clarifyAsk');
+  check('2 asked -> ask', nextClarifyRoute(2), 'clarifyAsk');
   check('3 asked -> stop and fall back', nextClarifyRoute(3), 'clarifyLimit');
   check('4 asked -> stay on the fallback', nextClarifyRoute(4), 'clarifyLimit');
 
@@ -66,7 +66,7 @@ function run() {
     const count = countTrailingClarifications(history);
     const route = nextClarifyRoute(count);
     routes.push(route);
-    if (route === 'clarify') {
+    if (route === 'clarifyAsk') {
       history.push(ask(`Question ${turn + 1}`), reply('something vague'));
     } else {
       history.push({ role: 'assistant', content: 'Let me suggest some options instead.' });
@@ -74,7 +74,7 @@ function run() {
     }
   }
   console.log(`  routes: ${routes.join(' -> ')}`);
-  check('asks 3 times then falls back', routes, ['clarify', 'clarify', 'clarify', 'clarifyLimit']);
+  check('asks 3 times then falls back', routes, ['clarifyAsk', 'clarifyAsk', 'clarifyAsk', 'clarifyLimit']);
   check('fallback resets the streak for a fresh attempt', streakAfterFallback, 0);
 
   console.log('\nStreak resets once the trip is actually planned:');
@@ -84,18 +84,21 @@ function run() {
     0
   );
 
-  // Structural guarantees: a reply to a clarification re-enters Extract because
-  // every run starts there, and Clarify/ClarifyLimit both end the run (pause).
+  // Structural guarantees: the clarification loop is a real in-graph loop now —
+  // Clarify suspends (interrupt) and loops back into Extract, so there is no
+  // Clarify -> END edge at all.
   console.log('\nGraph wiring:');
   const graph = (conversationGraph as any).getGraph();
   const hasEdge = (source: string, target: string) =>
     graph.edges.some((e: any) => e.source === source && e.target === target);
 
   check('START -> Extract (every turn re-enters Extract)', hasEdge('__start__', 'extract'), true);
-  check('Extract can branch to Clarify', hasEdge('extract', 'clarify'), true);
-  check('Extract can branch to ClarifyLimit', hasEdge('extract', 'clarifyLimit'), true);
-  check('Clarify ends the run (state pauses)', hasEdge('clarify', '__end__'), true);
-  check('ClarifyLimit ends the run', hasEdge('clarifyLimit', '__end__'), true);
+  check('Extract can branch to Clarify Ask', hasEdge('extract', 'clarifyAsk'), true);
+  check('Extract can branch to Clarify Limit', hasEdge('extract', 'clarifyLimit'), true);
+  check('Clarify Ask -> Clarify (question then pause)', hasEdge('clarifyAsk', 'clarify'), true);
+  check('Clarify -> Extract (in-graph loop)', hasEdge('clarify', 'extract'), true);
+  check('Clarify no longer ends the run', hasEdge('clarify', '__end__'), false);
+  check('ClarifyLimit still ends the run', hasEdge('clarifyLimit', '__end__'), true);
   check('Gather -> Generate (planning clears the streak)', hasEdge('gather', 'generate'), true);
 
   console.log('\n═══════════════════════════════════════════════════════════');

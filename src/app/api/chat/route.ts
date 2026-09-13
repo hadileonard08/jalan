@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import { auth } from '@clerk/nextjs/server';
 import { cookies } from 'next/headers';
+import { Command } from '@langchain/langgraph';
 import { conversationGraph, generateTitle } from '@/agents/conversation-graph';
 import { db } from '@/db';
 import { userPreferences } from '@/db/schema';
@@ -110,20 +111,37 @@ export async function POST(req: Request) {
         const streamUserPreferences = await getUserPreferences(userId);
 
         // thread_id ties the run to this conversation so the checkpointer can
-        // pause at END and resume with the same state on the user's next reply.
-        const graphStream = await conversationGraph.stream(
-          { userMessage: message, history, userPreferences: streamUserPreferences },
-          { streamMode: 'updates', configurable: { thread_id: conversation.id } }
-        );
+        // suspend on a clarifying question and resume with the same state.
+        const graphConfig = { configurable: { thread_id: conversation.id } };
+
+        // A suspended thread means the user is answering a clarifying question,
+        // so resume from the interrupted node rather than starting a new run.
+        let isResuming = false;
+        try {
+          const snapshot: any = await conversationGraph.getState(graphConfig);
+          isResuming = (snapshot?.next?.length ?? 0) > 0;
+        } catch {
+          // No checkpointer or no prior state — fall through to a fresh run.
+        }
+
+        const graphStream = isResuming
+          ? await conversationGraph.stream(
+              new Command({ resume: message, update: { history, userMessage: message } }),
+              { ...graphConfig, streamMode: 'updates' }
+            )
+          : await conversationGraph.stream(
+              { userMessage: message, history, userPreferences: streamUserPreferences },
+              { ...graphConfig, streamMode: 'updates' }
+            );
 
         for await (const chunk of graphStream) {
           for (const [nodeName, update] of Object.entries(chunk)) {
             if (nodeName in statusMap) {
               emit({ type: 'status', message: statusMap[nodeName] });
             }
-            if (nodeName === 'clarify') {
-              askedClarifyingQuestion = true;
-            }
+            // Whether this turn asked a question is decided after the stream, by
+            // checking if the run suspended — the clarify node also appears when
+            // a suspended run resumes, so its name alone is not a signal.
             if (typeof update === 'object' && update !== null) {
               result = { ...result, ...update };
               const nodeUpdate = update as Record<string, unknown>;
@@ -141,6 +159,15 @@ export async function POST(req: Request) {
               }
             }
           }
+        }
+
+        // A run that is still suspended asked a clarifying question and is
+        // waiting for the user, so the message is marked for the loop guard.
+        try {
+          const after: any = await conversationGraph.getState(graphConfig);
+          askedClarifyingQuestion = (after?.next?.length ?? 0) > 0;
+        } catch {
+          askedClarifyingQuestion = false;
         }
 
         const finalResponse = (result.finalResponse || result.itinerary || 'Here is what I found.') as string;

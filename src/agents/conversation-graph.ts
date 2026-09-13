@@ -1,4 +1,4 @@
-import { StateGraph, START, END, Annotation } from '@langchain/langgraph';
+import { StateGraph, START, END, Annotation, interrupt } from '@langchain/langgraph';
 import { getChatModel, getQualityModel } from '../lib/ai-provider';
 import { getWeatherForecast } from './weather';
 import { searchDestinationNews } from './news-search';
@@ -477,14 +477,14 @@ function inferDurationDays(text: string): number | undefined {
   return undefined;
 }
 
-async function clarifyNode(state: typeof ConversationStateAnnotation.State) {
+// Writes the clarifying question. This is the "expensive" half of the pair:
+// it runs exactly once, because the interrupt node below is the one that
+// re-executes when the run resumes.
+async function clarifyAskNode(state: typeof ConversationStateAnnotation.State) {
   if (!llm) throw new Error('AI provider not configured');
-  // Each clarifying question advances the streak; the reply comes back into
-  // Extract on the next turn, which re-seeds the count from history.
-  const clarificationCount = state.clarificationCount + 1;
 
   if (state.dateValidationError) {
-    return { questions: [], finalResponse: state.dateValidationError, clarificationCount };
+    return { questions: [], finalResponse: state.dateValidationError };
   }
 
   const isVague = state.entities.intent === 'vague';
@@ -510,13 +510,28 @@ Respond ONLY in plain text (no JSON, no markdown headers).`;
 
   const res = await llm.invoke(prompt);
   const finalResponse = (res.content as string).trim() || 'I need a bit more info to plan your trip.';
-  return { questions: [], finalResponse, clarificationCount };
+  return { questions: [], finalResponse };
+}
+
+// Suspends the run and waits for the user's reply. LangGraph re-executes this
+// node from the top on resume, so it must stay side-effect free — nothing but
+// interrupt() runs before the pause.
+async function clarifyNode(state: typeof ConversationStateAnnotation.State) {
+  interrupt({
+    question: state.finalResponse,
+    missingFields: state.missingFields,
+  });
+
+  // Reached only after the user replies: the reply already arrived via
+  // Command({ resume, update }), so all this needs to do is advance the streak
+  // and hand control back to Extract (see the clarify → extract edge).
+  return { clarificationCount: state.clarificationCount + 1 };
 }
 
 // Loop guard: once we've asked MAX_CLARIFICATIONS questions in a row without
 // getting anywhere, stop asking and hand the user a concrete way forward.
 export function nextClarifyRoute(clarificationCount: number) {
-  return clarificationCount >= MAX_CLARIFICATIONS ? 'clarifyLimit' : 'clarify';
+  return clarificationCount >= MAX_CLARIFICATIONS ? 'clarifyLimit' : 'clarifyAsk';
 }
 
 function routeToClarify(state: typeof ConversationStateAnnotation.State) {
@@ -1252,6 +1267,7 @@ Title:`;
 
 export const conversationGraph = new StateGraph(ConversationStateAnnotation)
   .addNode('extract', extractNode)
+  .addNode('clarifyAsk', clarifyAskNode)
   .addNode('clarify', clarifyNode)
   .addNode('clarifyLimit', clarifyLimitNode)
   .addNode('answer', answerNode)
@@ -1265,7 +1281,10 @@ export const conversationGraph = new StateGraph(ConversationStateAnnotation)
   .addNode('reject', rejectNode)
   .addEdge(START, 'extract')
   .addConditionalEdges('extract', routeAfterExtract)
-  .addEdge('clarify', END)
+  // Clarify suspends the run (interrupt) and loops back into Extract once the
+  // user replies — a real in-graph loop, no END in between.
+  .addEdge('clarifyAsk', 'clarify')
+  .addEdge('clarify', 'extract')
   .addEdge('clarifyLimit', END)
   .addEdge('answer', END)
   .addEdge('gather', 'generate')
