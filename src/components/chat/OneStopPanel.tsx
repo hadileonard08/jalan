@@ -1253,6 +1253,48 @@ function UnassignedProposals({
   );
 }
 
+// Review queue so a Master Planner can approve everything in one place,
+// instead of hunting through each day panel.
+function PendingSuggestionsModal({
+  proposals,
+  actionId,
+  onReview,
+  onClose,
+}: {
+  proposals: TripProposal[];
+  actionId: string | null;
+  onReview: (proposalId: string, action: 'accept' | 'reject') => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
+      <div className="relative w-full max-w-lg max-h-[85vh] overflow-y-auto rounded-[20px] border border-black/[0.05] dark:border-white/[0.1] bg-white dark:bg-[#2c2c2e] shadow-[0_20px_70px_rgba(0,0,0,0.2)] p-5 space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 font-semibold text-gray-900 dark:text-gray-100">
+            <UserCog size={18} className="text-amber-600" /> Waiting for approval ({proposals.length})
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 p-1">
+            <X size={18} />
+          </button>
+        </div>
+        <p className="text-[12px] text-gray-500 dark:text-gray-400">
+          Accepting applies the AI patch to the itinerary. Rejecting leaves it unchanged.
+        </p>
+        {proposals.map((proposal) => (
+          <ProposalCard
+            key={proposal.id}
+            proposal={proposal}
+            canReview
+            actionId={actionId}
+            onReview={onReview}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // --- Sharing / invites ---
 
 interface TripMember {
@@ -1436,7 +1478,7 @@ function TripSharingModal({ trip, onClose }: { trip: SavedTrip; onClose: () => v
 
 // --- SavedTripCard ---
 
-function SavedTripCard({ trip, onUpdate, onDelete, onLeave, isSignedIn }: { trip: SavedTrip; onUpdate: (trip: SavedTrip) => void; onDelete?: () => void; onLeave?: () => void; isSignedIn: boolean }) {
+function SavedTripCard({ trip, onUpdate, onDelete, onLeave, isSignedIn, isOpen }: { trip: SavedTrip; onUpdate: (trip: SavedTrip) => void; onDelete?: () => void; onLeave?: () => void; isSignedIn: boolean; isOpen: boolean }) {
   const [activeTab, setActiveTab] = useState<'itinerary' | 'weather' | 'routes' | 'flights' | 'packing' | 'todos' | 'notes'>('itinerary');
   const [todoText, setTodoText] = useState('');
   const [proposals, setProposals] = useState<TripProposal[]>([]);
@@ -1444,18 +1486,33 @@ function SavedTripCard({ trip, onUpdate, onDelete, onLeave, isSignedIn }: { trip
   const [submittingDay, setSubmittingDay] = useState<number | null>(null);
   const [proposalActionId, setProposalActionId] = useState<string | null>(null);
   const [sharingOpen, setSharingOpen] = useState(false);
+  const [reviewOpen, setReviewOpen] = useState(false);
 
-  // Load collaboration role and pending proposals for this trip.
+  // Load collaboration role and pending proposals for this trip, and refresh
+  // them while One Stop is open so new suggestions show up on their own.
   useEffect(() => {
     if (!isSignedIn) return;
-    fetch(`/api/saved-trips/${trip.id}/proposals`)
-      .then((r) => r.json())
-      .then((data) => {
-        if (data.role) setProposalRole(data.role);
-        if (Array.isArray(data.proposals)) setProposals(data.proposals);
-      })
-      .catch(() => {});
-  }, [trip.id, isSignedIn]);
+    let cancelled = false;
+
+    const loadProposals = () => {
+      fetch(`/api/saved-trips/${trip.id}/proposals`)
+        .then((r) => r.json())
+        .then((data) => {
+          if (cancelled) return;
+          if (data.role) setProposalRole(data.role);
+          if (Array.isArray(data.proposals)) setProposals(data.proposals);
+        })
+        .catch(() => {});
+    };
+
+    loadProposals();
+    if (!isOpen) return () => { cancelled = true; };
+
+    const interval = setInterval(loadProposals, 30000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [trip.id, isSignedIn, isOpen]);
+
+  const pendingProposals = proposals.filter((p) => p.status === 'pending');
 
   // day is passed so the AI targets that day; the stored prompt stays as typed.
   const submitProposal = async (day: number, prompt: string): Promise<boolean> => {
@@ -1557,6 +1614,16 @@ function SavedTripCard({ trip, onUpdate, onDelete, onLeave, isSignedIn }: { trip
                 <UserCog size={11} />
                 {ROLE_LABELS[proposalRole]}
               </span>
+            )}
+            {canReviewRole(proposalRole) && pendingProposals.length > 0 && (
+              <button
+                onClick={() => setReviewOpen(true)}
+                className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-200 hover:bg-amber-200 dark:hover:bg-amber-900/50 transition-colors"
+                title="Review suggested changes"
+              >
+                <UserCog size={11} />
+                {pendingProposals.length} waiting for approval
+              </button>
             )}
           </div>
           <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400 mt-1">
@@ -1752,6 +1819,15 @@ function SavedTripCard({ trip, onUpdate, onDelete, onLeave, isSignedIn }: { trip
 
       {sharingOpen && (
         <TripSharingModal trip={trip} onClose={() => setSharingOpen(false)} />
+      )}
+
+      {reviewOpen && (
+        <PendingSuggestionsModal
+          proposals={pendingProposals}
+          actionId={proposalActionId}
+          onReview={reviewProposal}
+          onClose={() => setReviewOpen(false)}
+        />
       )}
     </div>
   );
@@ -2121,6 +2197,7 @@ export default function OneStopPanel({ isOpen, onClose, savedTrips, setSavedTrip
               <div className="mx-auto max-w-6xl">
                 <SavedTripCard
                   isSignedIn={isSignedIn}
+                  isOpen={isOpen}
                   trip={savedTrips[0]}
                   onUpdate={updateTrip}
                   onDelete={() => deleteTrip(savedTrips[0].id)}
@@ -2183,6 +2260,7 @@ export default function OneStopPanel({ isOpen, onClose, savedTrips, setSavedTrip
                     {activeTrip ? (
                       <SavedTripCard
                         isSignedIn={isSignedIn}
+                        isOpen={isOpen}
                         trip={activeTrip}
                         onUpdate={updateTrip}
                         onDelete={() => deleteTrip(activeTrip.id)}
