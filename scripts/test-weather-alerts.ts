@@ -4,7 +4,7 @@ import { NextRequest } from 'next/server';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import type { SQL } from 'drizzle-orm';
 import { db } from '../src/db';
-import { getDepartureWeatherAlert } from '../src/agents/weather';
+import { getDepartureWeatherAlert, getDestinationWeatherSnapshot } from '../src/agents/weather';
 
 const targetDate = '2026-09-13';
 const point = { lat: 43.0389, lon: -87.9065 };
@@ -18,6 +18,23 @@ const forecast = (probability: number | null = 20, code: number | null = 0) => (
     wind_gusts_10m_max: [20],
   },
 });
+
+const rangeForecast = (probability = 20, code = 0) => {
+  const days = Array.from({ length: 16 }, (_, index) =>
+    new Date(Date.parse('2026-09-11T00:00:00Z') + index * 86400000).toISOString().slice(0, 10));
+  return {
+    timezone: 'America/Chicago',
+    daily: {
+      time: days,
+      precipitation_probability_max: days.map(() => probability),
+      weather_code: days.map(() => code),
+      temperature_2m_max: days.map(() => 24),
+      temperature_2m_min: days.map(() => 15),
+      wind_gusts_10m_max: days.map(() => 20),
+      precipitation_sum: days.map(() => 0),
+    },
+  };
+};
 
 async function check(name: string, run: () => Promise<void>) {
   try {
@@ -133,6 +150,37 @@ async function main() {
     await assert.rejects(() => getDepartureWeatherAlert({ destination: 'Milwaukee', departureDate: targetDate, waypoints: [point] }));
   });
 
+  await check('builds a 16-day destination snapshot with conditions, temperatures, and rain chance', async () => {
+    let calls = 0;
+    mock.method(globalThis, 'fetch', async (input: string | URL, init?: RequestInit) => {
+      calls++;
+      const url = new URL(input);
+      assert.equal(url.origin, 'https://api.open-meteo.com');
+      assert.equal(url.searchParams.get('latitude'), String(point.lat));
+      assert.equal(url.searchParams.get('timezone'), 'auto');
+      assert.ok(url.searchParams.get('daily')?.includes('precipitation_sum'));
+      assert.equal(init?.cache, 'no-store');
+      const start = url.searchParams.get('start_date');
+      const end = url.searchParams.get('end_date');
+      assert.ok(start && end && start < end, 'snapshot must request a date range, not a single day');
+      return Response.json(rangeForecast(65));
+    });
+    const snapshot = await getDestinationWeatherSnapshot({ destination: 'Milwaukee', waypoints: [point] });
+    assert.equal(calls, 1);
+    assert.equal(snapshot.days.length, 16);
+    assert.equal(snapshot.timezone, 'America/Chicago');
+    assert.equal(snapshot.days[0].condition, 'Clear sky');
+    assert.equal(snapshot.days[0].precipitationProbability, 65);
+    assert.equal(snapshot.days[0].maxTemp, 24);
+    assert.equal(snapshot.days[0].minTemp, 15);
+    assert.ok(!Number.isNaN(Date.parse(snapshot.updatedAt)));
+  });
+
+  await check('a failed snapshot fetch rejects so the cron keeps the previous snapshot', async () => {
+    mock.method(globalThis, 'fetch', async () => new Response('', { status: 503 }));
+    await assert.rejects(() => getDestinationWeatherSnapshot({ destination: 'Milwaukee', waypoints: [point] }));
+  });
+
   const { GET } = await import('../src/app/api/cron/weather-check/route');
   const originalSecret = process.env.CRON_SECRET;
   const request = (authorization?: string) => new NextRequest('http://localhost:3000/api/cron/weather-check', {
@@ -150,57 +198,95 @@ async function main() {
       assert.equal((await GET(request('Bearer wrong-secret'))).status, 401);
     });
 
-    await check('cron targets two UTC calendar days ahead and only persists server-generated weather alerts', async () => {
+    await check('cron targets two UTC calendar days ahead, writes alerts, and refreshes destination snapshots', async () => {
       mock.method(Date, 'now', () => Date.parse('2026-09-11T08:00:00Z'));
-      const trips = [
+      const alertTrips = [
         { id: 'rainy-trip', destination: 'Milwaukee', destinationCode: 'MKE', waypoints: [point], weatherAlert: null },
         { id: 'same-destination', destination: 'Milwaukee', destinationCode: 'MKE', waypoints: [point], weatherAlert: null },
         { id: 'clear-trip', destination: 'Clear City', destinationCode: null, waypoints: [{ lat: 10, lon: 10 }], weatherAlert: 'Old alert' },
         { id: 'failed-trip', destination: 'Failed City', destinationCode: null, waypoints: [{ lat: 20, lon: 20 }], weatherAlert: 'Keep this alert' },
       ];
+      const snapshotTrips = [
+        { destination: 'Milwaukee', destinationCode: 'MKE', waypoints: [point], startDate: '2026-10-01' },
+        { destination: 'Clear City', destinationCode: null, waypoints: [{ lat: 10, lon: 10 }], startDate: null },
+        { destination: 'Failed City', destinationCode: null, waypoints: [{ lat: 20, lon: 20 }], startDate: '2026-12-01' },
+        { destination: 'Snapshot Fail', destinationCode: null, waypoints: [{ lat: 30, lon: 30 }], startDate: '2026-11-01' },
+        { destination: 'Already Gone', destinationCode: null, waypoints: [{ lat: 40, lon: 40 }], startDate: '2026-01-01' },
+      ];
       let queryChecked = false;
       mock.method(db, 'select', () => ({
-        from: () => ({
-          where: async (where: SQL) => {
-            const query = new PgDialect().sqlToQuery(where);
-            assert.ok(query.params.includes(targetDate));
-            assert.match(query.sql, /startDate/);
-            assert.match(query.sql, /dates/);
-            queryChecked = true;
-            return trips;
-          },
-        }),
+        from: () => {
+          const builder: Record<string, unknown> = {
+            where: async (where: SQL) => {
+              const query = new PgDialect().sqlToQuery(where);
+              assert.ok(query.params.includes(targetDate));
+              assert.match(query.sql, /startDate/);
+              assert.match(query.sql, /dates/);
+              queryChecked = true;
+              return alertTrips;
+            },
+          };
+          builder.then = (resolve: (value: unknown) => unknown) => resolve(snapshotTrips);
+          return builder;
+        },
       }));
-      const updates: { id: string; weatherAlert: string | null }[] = [];
+      const updates: { set: Record<string, unknown>; params: unknown[] }[] = [];
       mock.method(db, 'update', () => ({
-        set: (update: { weatherAlert: string | null }) => ({
+        set: (values: Record<string, unknown>) => ({
           where: async (where: SQL) => {
-            assert.deepEqual(Object.keys(update), ['weatherAlert']);
             const query = new PgDialect().sqlToQuery(where);
-            updates.push({ id: String(query.params[0]), weatherAlert: update.weatherAlert });
+            updates.push({ set: values, params: query.params });
           },
         }),
       }));
       let fetches = 0;
       mock.method(globalThis, 'fetch', async (input: string | URL) => {
         fetches++;
-        const latitude = new URL(input).searchParams.get('latitude');
-        if (latitude === '20') return new Response('', { status: 503 });
-        return Response.json(forecast(latitude === '10' ? 0 : 80));
+        const url = new URL(input);
+        const latitude = url.searchParams.get('latitude');
+        if (latitude === '30') return new Response('', { status: 503 });
+        if (latitude === '40') throw new Error('Past trips must not be fetched');
+        const start = url.searchParams.get('start_date');
+        const end = url.searchParams.get('end_date');
+        if (start === end) {
+          if (latitude === '20') return new Response('', { status: 503 });
+          return Response.json(forecast(latitude === '10' ? 0 : 80));
+        }
+        return Response.json(rangeForecast());
       });
       const response = await GET(request('Bearer weather-cron-test-secret'));
       const result = await response.json();
+
       assert.equal(queryChecked, true);
       assert.equal(result.targetDate, targetDate);
       assert.equal(result.checked, 3);
       assert.equal(result.alerts, 2);
       assert.equal(result.failed, 1);
+      assert.equal(result.snapshots, 3);
+      assert.equal(result.snapshotFailures, 1);
       assert.equal(response.status, 500);
-      assert.equal(fetches, 3);
-      assert.equal(updates.length, 3);
-      assert.equal(updates.find((update) => update.id === 'clear-trip')?.weatherAlert, null);
-      assert.equal(updates.some((update) => update.id === 'failed-trip'), false);
-      assert.match(updates.find((update) => update.id === 'rainy-trip')?.weatherAlert || '', /80%/);
+      // 3 alert fetches (2 Milwaukee trips deduped to 1) + 4 snapshot fetches
+      // (the already-departed trip is skipped entirely).
+      assert.equal(fetches, 7);
+
+      const alertUpdates = updates.filter((update) => 'weatherAlert' in update.set && update.set.weatherAlert !== null);
+      const snapshotUpdates = updates.filter((update) => 'weatherSnapshot' in update.set);
+      const cleanupUpdates = updates.filter((update) => update.set.weatherAlert === null);
+
+      assert.equal(alertUpdates.length, 2);
+      assert.match(String(alertUpdates.find((update) => update.params[0] === 'rainy-trip')?.set.weatherAlert), /80%/);
+      assert.equal(alertUpdates.some((update) => update.params[0] === 'failed-trip'), false);
+      assert.equal(alertUpdates.some((update) => update.params[0] === 'clear-trip'), false);
+
+      assert.equal(snapshotUpdates.length, 3);
+      const milwaukeeSnapshot = JSON.parse(String(snapshotUpdates[0].set.weatherSnapshot));
+      assert.equal(milwaukeeSnapshot.days.length, 16);
+      assert.equal(snapshotUpdates[0].params[0], 'Milwaukee');
+      assert.ok(snapshotUpdates[0].set.weatherUpdatedAt instanceof Date);
+
+      // clear-trip's now-clear forecast plus the batch cleanup for departed trips.
+      assert.equal(cleanupUpdates.length, 2);
+      assert.ok(cleanupUpdates.some((update) => update.params[0] === 'clear-trip'));
     });
   } finally {
     if (originalSecret === undefined) delete process.env.CRON_SECRET;

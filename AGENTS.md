@@ -40,11 +40,12 @@ npx tsx scripts/test-images.ts --destination London     # test specific destinat
 npx tsx scripts/test-images.ts --full                   # hydration test only
 ```
 
-### Weather alert test (NO Gemini tokens, NO network, NO database writes)
+### Weather + itinerary cleanup tests (NO Gemini tokens, NO network, NO database writes)
 ```bash
-npx tsx scripts/test-weather-alerts.ts   # covers thresholds, WMO codes, cron auth, date targeting, and persistence
+npx tsx scripts/test-weather-alerts.ts      # thresholds, WMO codes, cron auth, date targeting, snapshots, persistence
+npx tsx scripts/test-itinerary-cleanup.ts   # strips trailing follow-up questions from saved plans
 ```
-All external calls and Drizzle queries are mocked, so this is safe to run anywhere.
+All external calls and Drizzle queries are mocked, so these are safe to run anywhere.
 
 ### Smoke tests (local first, then production)
 ```bash
@@ -77,7 +78,8 @@ npx tsx scripts/smoke-test.ts
 - `vercel.json` schedules `/api/cron/weather-check` daily at 08:00 UTC.
 - Requires `CRON_SECRET` in the Vercel project environment variables. Vercel sends it automatically as `Authorization: Bearer $CRON_SECRET`; the route returns 401 when it is missing or wrong.
 - The cron checks saved trips departing two calendar days ahead (UTC) and writes or clears `saved_trips.weather_alert`. Alerts appear as an amber banner at the top of the One Stop trip card.
-- Weather lookups reuse saved route coordinates and fall back to Open-Meteo geocoding by destination name. A failed lookup leaves the existing alert untouched rather than clearing it.
+- The same run refreshes `saved_trips.weather_snapshot` (a 16-day daily forecast, deduped per destination) which powers the One Stop **Weather** tab, and clears alerts for trips that already departed.
+- Weather lookups reuse saved route coordinates and fall back to Open-Meteo geocoding by destination name. A failed lookup leaves the existing alert/snapshot untouched rather than clearing it.
 
 ## Known Bugs & Fixes (lessons learned)
 

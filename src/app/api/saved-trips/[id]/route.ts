@@ -44,6 +44,8 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
         destination: updated.destination,
         dates: updated.dates || 'Dates TBD',
         weatherAlert: updated.weatherAlert,
+        weatherSnapshot: updated.weatherSnapshot ? JSON.parse(updated.weatherSnapshot) : null,
+        weatherUpdatedAt: updated.weatherUpdatedAt ? updated.weatherUpdatedAt.toISOString() : null,
         payload: JSON.parse(updated.payload),
         todos: JSON.parse(updated.todos),
         notes: updated.notes,

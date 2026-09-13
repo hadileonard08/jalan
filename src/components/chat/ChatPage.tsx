@@ -687,9 +687,9 @@ export default function ChatPage() {
     }
   }, [savedTrips, isLoaded, isSignedIn]);
 
-  // Refresh weather alerts whenever One Stop opens so cron-generated alerts
-  // appear without a page reload. Only the alert field is merged in, so
-  // unsynced local edits (todos, notes, feedback) are never clobbered.
+  // Refresh cron-generated weather data whenever One Stop opens so it appears
+  // without a page reload. Only the weather fields are merged in, so unsynced
+  // local edits (todos, notes, feedback) are never clobbered.
   useEffect(() => {
     if (!isLoaded || !isSignedIn || !oneStopOpen) return;
     let cancelled = false;
@@ -699,10 +699,16 @@ export default function ChatPage() {
         if (cancelled || !data.trips) return;
         setSavedTrips((prev) => prev.map((trip) => {
           const fresh = data.trips!.find((t) => t.id === trip.id);
-          return fresh ? { ...trip, weatherAlert: fresh.weatherAlert } : trip;
+          if (!fresh) return trip;
+          return {
+            ...trip,
+            weatherAlert: fresh.weatherAlert,
+            weatherSnapshot: fresh.weatherSnapshot,
+            weatherUpdatedAt: fresh.weatherUpdatedAt,
+          };
         }));
       })
-      .catch(() => { /* keep the alerts we already have */ });
+      .catch(() => { /* keep the weather data we already have */ });
     return () => { cancelled = true; };
   }, [isLoaded, isSignedIn, oneStopOpen]);
 
@@ -757,6 +763,8 @@ export default function ChatPage() {
       dates,
       payload,
       weatherAlert: null,
+      weatherSnapshot: null,
+      weatherUpdatedAt: null,
       todos: [],
       notes: '',
       feedback: {},

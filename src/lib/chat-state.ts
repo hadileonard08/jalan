@@ -155,6 +155,24 @@ export interface DayFeedback {
   comments: DayComment[];
 }
 
+// Live destination forecast shown in the One Stop Weather tab.
+export interface WeatherSnapshotDay {
+  date: string;              // YYYY-MM-DD
+  code: number | null;       // WMO weather code
+  condition: string;         // e.g. "Rain"
+  maxTemp: number | null;    // °C
+  minTemp: number | null;    // °C
+  precipitationMm: number | null;
+  precipitationProbability: number | null; // 0-100
+  windGusts: number | null;  // km/h
+}
+
+export interface WeatherSnapshot {
+  updatedAt: string;
+  timezone: string | null;
+  days: WeatherSnapshotDay[];
+}
+
 // Manual flight/hotel/document entry for the Flights & Docs tab.
 export interface ManualFlightEntry {
   id: string;
@@ -165,6 +183,7 @@ export interface ManualFlightEntry {
   departureTime?: string;    // ISO datetime
   arrivalTime?: string;      // ISO datetime
   notes?: string;
+  documentIds?: string[];    // PDFs attached to this booking
   createdAt: string;
 }
 
@@ -187,6 +206,8 @@ export interface SavedTrip {
   dates: string;
   payload: ChatPayload;
   weatherAlert?: string | null;
+  weatherSnapshot?: WeatherSnapshot | null;
+  weatherUpdatedAt?: string | null;
   todos: { id: string; text: string; done: boolean }[];
   notes: string;
   // Per-stop feedback keyed by landmark name (lowercased).

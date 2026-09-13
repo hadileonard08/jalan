@@ -10,8 +10,9 @@ import {
 } from 'lucide-react';
 import type {
   SavedTrip, ChatPayload, StopFeedback, StopComment, DayFeedback, DayComment,
-  ManualFlightEntry, UploadedDocument,
+  ManualFlightEntry, UploadedDocument, WeatherSnapshot,
 } from '@/lib/chat-state';
+import { stripFollowUpQuestions } from '@/lib/itinerary-cleanup';
 import type { DayTransport } from '@/agents/transport';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -401,7 +402,8 @@ function DayFeedbackBar({
 
 function ItineraryTab({ trip, onUpdate }: { trip: SavedTrip; onUpdate: (trip: SavedTrip) => void }) {
   const payload = trip.payload;
-  const dayBlocks = splitItineraryByDay(payload.itinerary || '');
+  // Saved plans shouldn't include the assistant's closing follow-up questions.
+  const dayBlocks = splitItineraryByDay(stripFollowUpQuestions(payload.itinerary || ''));
 
   const markdownComponents = {
     img: ({ src, alt }: any) => (
@@ -448,6 +450,30 @@ function ItineraryTab({ trip, onUpdate }: { trip: SavedTrip; onUpdate: (trip: Sa
 
 // --- Flights & Docs tab ---
 
+const MAX_PDF_BYTES = 10 * 1024 * 1024;
+
+function validatePdf(file: File): string | null {
+  if (file.size > MAX_PDF_BYTES) return 'File too large. Maximum size is 10 MB.';
+  if (file.type !== 'application/pdf') return 'Only PDF files are supported.';
+  return null;
+}
+
+function readDocument(file: File): Promise<UploadedDocument> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve({
+      id: crypto.randomUUID(),
+      name: file.name,
+      mimeType: file.type,
+      size: file.size,
+      dataUrl: reader.result as string,
+      uploadedAt: new Date().toISOString(),
+    });
+    reader.onerror = () => reject(new Error('Failed to read file.'));
+    reader.readAsDataURL(file);
+  });
+}
+
 const ENTRY_TYPE_ICONS: Record<ManualFlightEntry['type'], typeof Plane> = {
   flight: Plane,
   hotel: Hotel,
@@ -467,8 +493,44 @@ function FlightsDocsTab({ trip, onUpdate }: { trip: SavedTrip; onUpdate: (trip: 
     arrivalTime: '',
     notes: '',
   });
+  const [formDoc, setFormDoc] = useState<UploadedDocument | null>(null);
+  const [formError, setFormError] = useState('');
+  const formFileRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
+
+  const entries = trip.flightInfo || [];
+  const docs = trip.documents || [];
+  // PDFs already linked to a booking are shown inside that booking.
+  const attachedIds = new Set(entries.flatMap((entry) => entry.documentIds || []));
+  const looseDocs = docs.filter((doc) => !attachedIds.has(doc.id));
+
+  const resetForm = () => {
+    setForm({
+      type: 'flight', label: '', airlineOrProvider: '', confirmationCode: '',
+      departureTime: '', arrivalTime: '', notes: '',
+    });
+    setFormDoc(null);
+    setFormError('');
+    if (formFileRef.current) formFileRef.current.value = '';
+  };
+
+  const attachFormFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const error = validatePdf(file);
+    if (error) {
+      setFormError(error);
+      if (formFileRef.current) formFileRef.current.value = '';
+      return;
+    }
+    try {
+      setFormDoc(await readDocument(file));
+      setFormError('');
+    } catch {
+      setFormError('Failed to read file.');
+    }
+  };
 
   const addEntry = () => {
     if (!form.label.trim() && !form.airlineOrProvider.trim()) return;
@@ -481,58 +543,59 @@ function FlightsDocsTab({ trip, onUpdate }: { trip: SavedTrip; onUpdate: (trip: 
       departureTime: form.departureTime || undefined,
       arrivalTime: form.arrivalTime || undefined,
       notes: form.notes.trim() || undefined,
+      documentIds: formDoc ? [formDoc.id] : [],
       createdAt: new Date().toISOString(),
     };
-    onUpdate({ ...trip, flightInfo: [...(trip.flightInfo || []), entry] });
-    setForm({
-      type: 'flight', label: '', airlineOrProvider: '', confirmationCode: '',
-      departureTime: '', arrivalTime: '', notes: '',
+    onUpdate({
+      ...trip,
+      flightInfo: [...entries, entry],
+      documents: formDoc ? [...docs, formDoc] : docs,
     });
+    resetForm();
     setShowForm(false);
   };
 
   const deleteEntry = (id: string) => {
-    onUpdate({ ...trip, flightInfo: (trip.flightInfo || []).filter((e) => e.id !== id) });
+    const entry = entries.find((e) => e.id === id);
+    const removedIds = new Set(entry?.documentIds || []);
+    onUpdate({
+      ...trip,
+      flightInfo: entries.filter((e) => e.id !== id),
+      documents: docs.filter((doc) => !removedIds.has(doc.id)),
+    });
+  };
+
+  // Remove a PDF and unlink it from the booking it was attached to.
+  const deleteDoc = (id: string) => {
+    onUpdate({
+      ...trip,
+      flightInfo: entries.map((entry) => (
+        entry.documentIds?.includes(id)
+          ? { ...entry, documentIds: entry.documentIds.filter((docId) => docId !== id) }
+          : entry
+      )),
+      documents: docs.filter((doc) => doc.id !== id),
+    });
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.size > 10 * 1024 * 1024) {
-      alert('File too large. Maximum size is 10 MB.');
-      return;
-    }
-    if (file.type !== 'application/pdf') {
-      alert('Only PDF files are supported.');
+    const error = validatePdf(file);
+    if (error) {
+      alert(error);
+      if (fileInputRef.current) fileInputRef.current.value = '';
       return;
     }
     setUploading(true);
     try {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const dataUrl = reader.result as string;
-        const doc: UploadedDocument = {
-          id: crypto.randomUUID(),
-          name: file.name,
-          mimeType: file.type,
-          size: file.size,
-          dataUrl,
-          uploadedAt: new Date().toISOString(),
-        };
-        onUpdate({ ...trip, documents: [...(trip.documents || []), doc] });
-        setUploading(false);
-        if (fileInputRef.current) fileInputRef.current.value = '';
-      };
-      reader.onerror = () => { alert('Failed to read file.'); setUploading(false); };
-      reader.readAsDataURL(file);
+      const doc = await readDocument(file);
+      onUpdate({ ...trip, documents: [...docs, doc] });
     } catch {
       alert('Upload failed.');
-      setUploading(false);
     }
-  };
-
-  const deleteDoc = (id: string) => {
-    onUpdate({ ...trip, documents: (trip.documents || []).filter((d) => d.id !== id) });
+    setUploading(false);
+    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const downloadDoc = (doc: UploadedDocument) => {
@@ -542,9 +605,6 @@ function FlightsDocsTab({ trip, onUpdate }: { trip: SavedTrip; onUpdate: (trip: 
     a.click();
   };
 
-  const entries = trip.flightInfo || [];
-  const docs = trip.documents || [];
-
   return (
     <div className="space-y-4">
       {/* Manual entry form */}
@@ -552,7 +612,10 @@ function FlightsDocsTab({ trip, onUpdate }: { trip: SavedTrip; onUpdate: (trip: 
         <div className="border border-gray-200 dark:border-gray-700 rounded-xl p-4 bg-gray-50 dark:bg-gray-800/50 space-y-3">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Add Booking</h3>
-            <button onClick={() => setShowForm(false)} className="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 p-1">
+            <button
+              onClick={() => { setShowForm(false); resetForm(); }}
+              className="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 p-1"
+            >
               <X size={16} />
             </button>
           </div>
@@ -632,6 +695,42 @@ function FlightsDocsTab({ trip, onUpdate }: { trip: SavedTrip; onUpdate: (trip: 
               className="w-full text-sm border border-gray-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-400"
             />
           </div>
+          <div>
+            <label className="text-[13px] text-gray-500 dark:text-gray-400 mb-1 block">
+              Ticket / voucher (PDF, optional)
+            </label>
+            <input
+              ref={formFileRef}
+              type="file"
+              accept=".pdf,application/pdf"
+              onChange={attachFormFile}
+              className="hidden"
+            />
+            {formDoc ? (
+              <div className="flex items-center gap-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2">
+                <FileText size={16} className="text-red-500 flex-shrink-0" />
+                <span className="flex-1 min-w-0 truncate text-[13px] text-gray-700 dark:text-gray-300">{formDoc.name}</span>
+                <span className="text-[12px] text-gray-400 dark:text-gray-500 flex-shrink-0">
+                  {(formDoc.size / 1024).toFixed(0)} KB
+                </span>
+                <button
+                  onClick={() => { setFormDoc(null); if (formFileRef.current) formFileRef.current.value = ''; }}
+                  className="text-gray-400 hover:text-red-600 p-1 flex-shrink-0"
+                  title="Remove attachment"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => formFileRef.current?.click()}
+                className="w-full border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-lg py-2 text-[13px] text-gray-500 dark:text-gray-400 hover:border-blue-400 hover:text-blue-600 transition-colors flex items-center justify-center gap-1.5"
+              >
+                <Upload size={14} /> Attach PDF
+              </button>
+            )}
+            {formError && <div className="text-[12px] text-red-600 dark:text-red-400 mt-1">{formError}</div>}
+          </div>
           <button
             onClick={addEntry}
             className="w-full bg-blue-600 text-white text-sm font-medium px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center gap-1.5"
@@ -653,6 +752,7 @@ function FlightsDocsTab({ trip, onUpdate }: { trip: SavedTrip; onUpdate: (trip: 
         <div className="space-y-2">
           {entries.map((entry) => {
             const Icon = ENTRY_TYPE_ICONS[entry.type] || FileText;
+            const attached = docs.filter((doc) => entry.documentIds?.includes(doc.id));
             return (
               <div key={entry.id} className="border border-gray-200 dark:border-gray-700 rounded-xl p-3 bg-white dark:bg-gray-800 group">
                 <div className="flex items-start justify-between gap-2">
@@ -683,6 +783,36 @@ function FlightsDocsTab({ trip, onUpdate }: { trip: SavedTrip; onUpdate: (trip: 
                       {entry.notes && (
                         <div className="text-[13px] text-gray-400 dark:text-gray-500 mt-1">{entry.notes}</div>
                       )}
+                      {attached.length > 0 && (
+                        <div className="mt-2 space-y-1.5">
+                          {attached.map((doc) => (
+                            <div
+                              key={doc.id}
+                              className="flex items-center gap-2 rounded-lg border border-gray-100 dark:border-gray-700/60 bg-gray-50 dark:bg-gray-900/40 px-2.5 py-1.5"
+                            >
+                              <FileText size={14} className="text-red-500 flex-shrink-0" />
+                              <span className="flex-1 min-w-0 truncate text-[13px] text-gray-700 dark:text-gray-300">{doc.name}</span>
+                              <span className="text-[12px] text-gray-400 dark:text-gray-500 flex-shrink-0">
+                                {(doc.size / 1024).toFixed(0)} KB
+                              </span>
+                              <button
+                                onClick={() => downloadDoc(doc)}
+                                className="text-gray-400 hover:text-blue-600 p-1 flex-shrink-0"
+                                title="Download"
+                              >
+                                <Download size={14} />
+                              </button>
+                              <button
+                                onClick={() => deleteDoc(doc.id)}
+                                className="text-gray-400 hover:text-red-600 p-1 flex-shrink-0"
+                                title="Remove attachment"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </div>
                   <button
@@ -698,11 +828,14 @@ function FlightsDocsTab({ trip, onUpdate }: { trip: SavedTrip; onUpdate: (trip: 
         </div>
       )}
 
-      {/* Document upload */}
+      {/* Standalone document upload */}
       <div className="border-t border-gray-100 dark:border-gray-700 pt-4 space-y-3">
         <div className="text-[13px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
-          Documents
+          Other documents
         </div>
+        <p className="text-[12px] text-gray-400 dark:text-gray-500 -mt-1">
+          PDFs that aren&apos;t attached to a booking. Attach a ticket or voucher while adding a booking to keep them together.
+        </p>
         <input
           ref={fileInputRef}
           type="file"
@@ -722,9 +855,9 @@ function FlightsDocsTab({ trip, onUpdate }: { trip: SavedTrip; onUpdate: (trip: 
           )}
         </button>
 
-        {docs.length > 0 && (
+        {looseDocs.length > 0 && (
           <div className="space-y-2">
-            {docs.map((doc) => (
+            {looseDocs.map((doc) => (
               <div key={doc.id} className="border border-gray-200 dark:border-gray-700 rounded-xl p-3 bg-white dark:bg-gray-800 group flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 flex-1 min-w-0">
                   <div className="bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 p-2 rounded-lg flex-shrink-0">
@@ -762,10 +895,112 @@ function FlightsDocsTab({ trip, onUpdate }: { trip: SavedTrip; onUpdate: (trip: 
   );
 }
 
+// --- Weather tab ---
+
+function weatherEmoji(code: number | null): string {
+  if (code == null) return '🌡️';
+  if (code === 0) return '☀️';
+  if ([1, 2].includes(code)) return '🌤️';
+  if (code === 3) return '☁️';
+  if ([45, 48].includes(code)) return '🌫️';
+  if ([51, 53, 55, 56, 57].includes(code)) return '🌦️';
+  if ([61, 63, 65, 66, 67, 80, 81, 82].includes(code)) return '🌧️';
+  if ([71, 73, 75, 77, 85, 86].includes(code)) return '❄️';
+  if ([95, 96, 99].includes(code)) return '⛈️';
+  return '🌡️';
+}
+
+function formatRelativeTime(iso?: string | null): string {
+  if (!iso) return 'recently';
+  const diffMs = Date.now() - Date.parse(iso);
+  if (!Number.isFinite(diffMs)) return 'recently';
+  const minutes = Math.round(diffMs / 60000);
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
+function formatDayLabel(date: string): string {
+  const parsed = new Date(`${date}T12:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) return date;
+  return parsed.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
+}
+
+function WeatherTab({ trip }: { trip: SavedTrip }) {
+  const snapshot: WeatherSnapshot | null | undefined = trip.weatherSnapshot;
+  const planningWeather = typeof trip.payload.weather === 'string' ? trip.payload.weather : '';
+  const startDate = trip.payload.entities?.startDate;
+  const endDate = trip.payload.entities?.endDate || startDate;
+
+  if (!snapshot || snapshot.days.length === 0) {
+    return (
+      <div className="space-y-3">
+        <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/40 p-3 text-[13px] text-gray-500 dark:text-gray-400">
+          Live weather for {trip.destination} refreshes automatically once a day.
+          {planningWeather ? ' Meanwhile, here is the forecast from when this trip was planned.' : ' Check back shortly.'}
+        </div>
+        {planningWeather && (
+          <div className="prose prose-sm dark:prose-invert max-w-none text-gray-700 dark:text-gray-300">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{planningWeather}</ReactMarkdown>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  const tripDays = startDate
+    ? snapshot.days.filter((day) => day.date >= startDate && day.date <= (endDate || startDate))
+    : [];
+  const displayDays = tripDays.length > 0 ? tripDays : snapshot.days.slice(0, 7);
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="text-[13px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+          {tripDays.length > 0 ? 'Forecast for your trip' : 'Current outlook'}
+        </div>
+        <div className="text-[12px] text-gray-400 dark:text-gray-500">
+          {trip.destination} · updated {formatRelativeTime(trip.weatherUpdatedAt || snapshot.updatedAt)}
+        </div>
+      </div>
+
+      {tripDays.length === 0 && (
+        <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/40 p-3 text-[13px] text-gray-500 dark:text-gray-400">
+          Your trip is outside the 16-day forecast window. Showing the current 7-day outlook for {trip.destination}.
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+        {displayDays.map((day) => (
+          <div key={day.date} className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-3">
+            <div className="text-[12px] font-medium text-gray-500 dark:text-gray-400">{formatDayLabel(day.date)}</div>
+            <div className="text-2xl leading-tight mt-1">{weatherEmoji(day.code)}</div>
+            <div className="text-[13px] text-gray-700 dark:text-gray-300 mt-1">{day.condition}</div>
+            <div className="text-[13px] text-gray-500 dark:text-gray-400 mt-1">
+              {day.maxTemp != null ? `${Math.round(day.maxTemp)}°` : '–'}
+              {' / '}
+              {day.minTemp != null ? `${Math.round(day.minTemp)}°` : '–'}
+            </div>
+            {day.precipitationProbability != null && (
+              <div className="text-[12px] text-blue-600 dark:text-blue-400 mt-0.5">💧 {day.precipitationProbability}%</div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <div className="text-[12px] text-gray-400 dark:text-gray-500">
+        Refreshed daily by the Jalan weather check.
+      </div>
+    </div>
+  );
+}
+
 // --- SavedTripCard ---
 
 function SavedTripCard({ trip, onUpdate, onDelete }: { trip: SavedTrip; onUpdate: (trip: SavedTrip) => void; onDelete?: () => void }) {
-  const [activeTab, setActiveTab] = useState<'itinerary' | 'routes' | 'flights' | 'packing' | 'todos' | 'notes'>('itinerary');
+  const [activeTab, setActiveTab] = useState<'itinerary' | 'weather' | 'routes' | 'flights' | 'packing' | 'todos' | 'notes'>('itinerary');
   const [todoText, setTodoText] = useState('');
 
   const addTodo = () => {
@@ -845,7 +1080,7 @@ function SavedTripCard({ trip, onUpdate, onDelete }: { trip: SavedTrip; onUpdate
       </div>
 
       <div className="flex overflow-x-auto scrollbar-hide border-b border-gray-200 dark:border-gray-700 -mx-4 px-4 md:mx-0 md:px-0">
-        {(['itinerary', 'routes', 'flights', 'packing', 'todos', 'notes'] as const).map((tab) => (
+        {(['itinerary', 'weather', 'routes', 'flights', 'packing', 'todos', 'notes'] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -861,6 +1096,10 @@ function SavedTripCard({ trip, onUpdate, onDelete }: { trip: SavedTrip; onUpdate
       <div className="p-3 md:p-4">
         {activeTab === 'itinerary' && (
           <ItineraryTab trip={trip} onUpdate={onUpdate} />
+        )}
+
+        {activeTab === 'weather' && (
+          <WeatherTab trip={trip} />
         )}
 
         {activeTab === 'routes' && (

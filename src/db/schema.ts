@@ -99,6 +99,8 @@ export const savedTrips = pgTable('saved_trips', {
   dates: varchar('dates', { length: 255 }),
   payload: text('payload').notNull(), // JSON: full ChatPayload
   weatherAlert: text('weather_alert'),
+  weatherSnapshot: text('weather_snapshot'), // JSON: live forecast for the destination
+  weatherUpdatedAt: timestamp('weather_updated_at'),
   todos: text('todos').notNull().default('[]'), // JSON: [{ id, text, done }]
   notes: text('notes').notNull().default(''),
   feedback: text('feedback').notNull().default('{}'), // JSON: Record<stopName, StopFeedback>
