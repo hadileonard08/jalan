@@ -133,11 +133,13 @@ Gather (one-time: weather, news, deals, destination image)
   -> Respond (final assembly, SSE streaming)
 ```
 
-### Clarification loop (no checkpointer by design)
-- The graph runs **statelessly per request**: `loadMessages()` replays the whole conversation and `history` is passed into the graph, so a reply to a clarifying question already loops back into `Extract` with full context. A LangGraph checkpointer is deliberately not used — `MemorySaver` is useless on serverless (new process per request) and a durable saver would duplicate the history the DB already stores.
-- The loop guard is therefore **derived from history**, not checkpointed state: `countTrailingClarifications()` walks backwards and counts assistant messages whose payload has `clarification: true`. The chat route sets that flag whenever the graph ends at the `clarify` node.
+### Clarification loop + LangGraph checkpointer
+- The graph is **checkpointed per conversation** (`thread_id` = `conversation.id`) with `PostgresSaver` from `@langchain/langgraph-checkpoint-postgres@0.0.5` (pinned — 1.x needs `@langchain/core ^1.1`, which this repo isn't on). Saver lives in `src/agents/checkpointer.ts`; `pg` and the saver are server externals in `next.config.js`.
+- Run `npx tsx scripts/setup-checkpointer.ts` once to create the checkpoint tables (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`, `checkpoint_migrations`). Never call `setup()` in the request path.
+- **Per-run state must be cleared every turn.** Because state now survives between turns, `extractNode` spreads `PER_RUN_STATE_RESET` into its return — otherwise a stale `revisionCount` makes the Critic reject a new itinerary without retrying, and `isApproved`/`criticFeedback`/`draftItinerary` leak from the previous trip. `DURABLE_STATE_KEYS` lists what intentionally survives (`currentItinerary`, `previousItineraries`, inputs).
+- The loop guard is *also* derived from history (`countTrailingClarifications()` counts assistant messages whose payload has `clarification: true`, set by the chat route when a run ends at `clarify`), so it works even if a thread has no checkpoint yet.
 - `MAX_CLARIFICATIONS = 3`: after three consecutive questions `routeAfterExtract` diverts to `clarifyLimit`, which returns a concrete "here's how to phrase it" message and resets the count to 0. `Gather` also resets to 0 once the trip is actually being planned.
-- Test: `npx tsx scripts/test-clarify-loop.ts` (no LLM calls).
+- Tests (no LLM calls): `npx tsx scripts/test-clarify-loop.ts` (streak counting, 3-question cap, graph wiring) and `npx tsx scripts/test-checkpointer.ts` (reset coverage across all 26 state keys, durable state survives a second run, per-run state cannot leak, threads isolated).
 
 ### Enrichment pipeline (post-approval)
 - **Transport:** Geocode stops via Nominatim (cached), route via OSRM (walking + driving in parallel), LLM transit tips.

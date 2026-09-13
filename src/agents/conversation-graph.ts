@@ -6,6 +6,7 @@ import { getDestinationImageUrl, hydrateItineraryImages } from './destination-im
 import { verifyItineraryLandmarks, buildRouteLinks } from './itinerary-guardrails';
 import { buildTransportPlan, injectTransportNotes } from './transport';
 import { applyRefinements, extractExistingItinerary } from './refine-itinerary';
+import { getCheckpointer } from './checkpointer';
 import { db } from '../db';
 import { flights, deals } from '../db/schema';
 import { eq, gte, lte, inArray, and, sql } from 'drizzle-orm';
@@ -48,7 +49,7 @@ export function countTrailingClarifications(history: PersistedMessage[]): number
 type RetrievedDeal = Awaited<ReturnType<typeof getRelevantDeals>>[number];
 type TransportPlan = Awaited<ReturnType<typeof buildTransportPlan>>;
 
-const ConversationStateAnnotation = Annotation.Root({
+export const ConversationStateAnnotation = Annotation.Root({
   userMessage: Annotation<string>({ reducer: (_curr, next) => next, default: () => '' }),
   userQuery: Annotation<string>({ reducer: (_curr, next) => next, default: () => '' }),
   retrievedContext: Annotation<string>({ reducer: (_curr, next) => next, default: () => '' }),
@@ -78,6 +79,50 @@ const ConversationStateAnnotation = Annotation.Root({
 });
 
 const REQUIRED_FIELDS = ['destination', 'startDate'];
+
+// Fields that belong to ONE run. Because the graph is checkpointed per thread,
+// state now survives between turns — so these are cleared at the top of every
+// run. Without this, a stale `revisionCount` could make the critic reject a new
+// itinerary without retrying, or `isApproved`/`criticFeedback` could carry over
+// from a previous trip.
+//
+// Deliberately NOT reset (durable across turns): currentItinerary,
+// previousItineraries, and everything the caller supplies each request
+// (userMessage, history, userPreferences).
+export const PER_RUN_STATE_RESET: Partial<typeof ConversationStateAnnotation.State> = {
+  draftItinerary: '',
+  retrievedContext: '',
+  itinerary: '',
+  weather: null,
+  news: null,
+  deals: [],
+  images: {},
+  routeLinks: [],
+  transportPlan: null,
+  packingTips: '',
+  criticFeedback: [],
+  isApproved: false,
+  revisionCount: 0,
+  finalResponse: '',
+  ragEvaluation: null,
+  questions: [],
+};
+
+// State keys that must survive between turns (plus the per-request inputs).
+// The clarify-loop test asserts every annotation key is accounted for here or
+// in PER_RUN_STATE_RESET, so a new field can't be added without deciding.
+export const DURABLE_STATE_KEYS = [
+  'userMessage',
+  'userQuery',
+  'history',
+  'entities',
+  'userPreferences',
+  'missingFields',
+  'clarificationCount',
+  'dateValidationError',
+  'currentItinerary',
+  'previousItineraries',
+];
 
 async function parseJsonResponse(raw: string) {
   const text = raw.trim().replace(/^```(?:json)?\n?/, '').replace(/```$/, '');
@@ -279,6 +324,7 @@ User: ${state.userMessage}
   );
 
   return {
+    ...PER_RUN_STATE_RESET,
     userQuery: state.userMessage,
     entities,
     dateValidationError,
@@ -1230,4 +1276,6 @@ export const conversationGraph = new StateGraph(ConversationStateAnnotation)
   .addEdge('enrich', 'respond')
   .addEdge('respond', END)
   .addEdge('reject', END)
-  .compile();
+  // Checkpointed per conversation (thread_id) so a run can pause at END and
+  // resume with the same state on the next request.
+  .compile({ checkpointer: getCheckpointer() ?? undefined });

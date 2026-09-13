@@ -151,7 +151,9 @@ The Extract node is an **LLM router** — it classifies the user's intent and ch
 
 **Clarify is a conditional detour, not a prerequisite.** If the user provides enough information upfront (destination + dates), the flow skips Clarify and goes directly to Gather. After Clarify asks for missing info and the user replies, the next turn re-routes through Extract — which then sends the complete request to Gather.
 
-**The clarification streak survives across turns without a checkpointer.** The graph runs statelessly per request (the whole conversation is replayed from PostgreSQL), so `clarificationCount` is derived each turn by `countTrailingClarifications()`: the chat route marks an assistant message with `payload.clarification` whenever the run ends at the Clarify node, and the counter walks backwards over consecutive marked messages. After `MAX_CLARIFICATIONS = 3` in a row, the router diverts to **Clarify Limit** instead of asking a fourth time. A LangGraph checkpointer is deliberately not used — `MemorySaver` would be useless on serverless (a new process per request) and a durable saver would duplicate the history the database already stores.
+**Thread state is checkpointed, and the clarification streak survives across turns.** The graph is compiled with a **Postgres checkpointer** and invoked with `configurable: { thread_id: conversation.id }`, so a run can pause at END and resume with the same state when the user replies. The whole conversation is still replayed from PostgreSQL each turn, and `clarificationCount` is additionally derived by `countTrailingClarifications()` — the chat route marks an assistant message with `payload.clarification` whenever a run ends at the Clarify node, and the counter walks backwards over consecutive marked messages. After `MAX_CLARIFICATIONS = 3` in a row, the router diverts to **Clarify Limit** instead of asking a fourth time.
+
+Because state now persists between turns, `extractNode` clears every per-run field (`PER_RUN_STATE_RESET`) at the start of each run — without that, a stale `revisionCount` would make the Critic reject a new itinerary without retrying, and `isApproved` / `criticFeedback` / `draftItinerary` would leak from the previous trip. `currentItinerary` and `previousItineraries` are deliberately durable. Checkpoint tables are created once with `npx tsx scripts/setup-checkpointer.ts`.
 
 The revision loop runs `Critic → Generate` (or `Critic → Apply Refinements` for the refine intent), so weather, news, flight, and image retrieval are not repeated. Critic reasoning is appended to graph state as generation feedback. After three unsuccessful drafts, Jalan returns a safe rejection instead of exposing an itinerary below the quality threshold.
 
@@ -585,6 +587,8 @@ scripts/
   test-rag-evaluator.ts      # Structured RAG evaluator test with dummy retrieved context
   test-refine-patch.ts       # Delta Update merger test — Days 1 & 3 unchanged when editing Day 2, plus a multi-stop prose-line regression
   test-clarify-loop.ts       # Clarify loop guard: streak counting across turns + 3-question cap (no LLM calls)
+  test-checkpointer.ts       # Postgres checkpointer: reset coverage, durable state resumes, per-run state cannot leak
+  setup-checkpointer.ts      # One-time creation of the LangGraph checkpoint tables
   test-itinerary-cleanup.ts  # Trailing follow-up question stripping for saved itineraries
   test-weather-alerts.ts     # Weather thresholds, cron auth, date targeting, snapshot building (mocked)
   test-route-optimization.ts # OSRM Table Service + 2-opt route optimization test (Paris fixture)
@@ -647,6 +651,7 @@ scripts/
    npx tsx scripts/test-rag-evaluator.ts
    npx tsx scripts/test-refine-patch.ts
    npx tsx scripts/test-clarify-loop.ts
+   npx tsx scripts/test-checkpointer.ts
    npx tsx scripts/test-itinerary-cleanup.ts
    npx tsx scripts/test-weather-alerts.ts
    npx tsx scripts/test-route-optimization.ts

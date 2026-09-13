@@ -109,9 +109,11 @@ export async function POST(req: Request) {
 
         const streamUserPreferences = await getUserPreferences(userId);
 
+        // thread_id ties the run to this conversation so the checkpointer can
+        // pause at END and resume with the same state on the user's next reply.
         const graphStream = await conversationGraph.stream(
           { userMessage: message, history, userPreferences: streamUserPreferences },
-          { streamMode: 'updates' }
+          { streamMode: 'updates', configurable: { thread_id: conversation.id } }
         );
 
         for await (const chunk of graphStream) {

@@ -12,7 +12,11 @@ const nextConfig = {
         'fast-flights-ts',
         '@langchain/langgraph',
         '@langchain/core',
-        '@langchain/core/messages'
+        '@langchain/core/messages',
+        // The Postgres checkpointer opens a TCP pool via `pg`, which must not
+        // be bundled into the serverless function.
+        '@langchain/langgraph-checkpoint-postgres',
+        'pg'
       );
     }
     return config;

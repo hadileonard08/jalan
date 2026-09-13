@@ -14,6 +14,7 @@
     "@langchain/core": "^0.2.36",
     "@langchain/google-genai": "^0.1.2",
     "@langchain/langgraph": "^0.2.74",
+    "@langchain/langgraph-checkpoint-postgres": "^0.0.5",
     "@langchain/openai": "^0.2.11",
     "@neondatabase/serverless": "^0.10.0",
     "@types/leaflet": "^1.9.22",
