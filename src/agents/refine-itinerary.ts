@@ -378,18 +378,28 @@ export async function generateItineraryPatchOptions(
   existingItinerary: string,
   destination: string,
   userQuery: string,
+  conversation: { role: 'user' | 'assistant'; content: string }[] = [],
 ): Promise<ItineraryPatchOption[]> {
   if (!existingItinerary) {
     throw new Error('No existing itinerary to refine.');
   }
 
-  const prompt = `${buildPatchPrompt(existingItinerary, destination, userQuery)}
+  // Earlier turns let the suggester keep refining ("make the second one cheaper")
+  // instead of starting over from scratch each time.
+  const historyBlock = conversation.length
+    ? `\n\nEarlier in this conversation:\n${conversation
+        .map((turn) => `${turn.role === 'user' ? 'User' : 'Assistant'}: ${turn.content}`)
+        .join('\n')}\n`
+    : '';
+
+  const prompt = `${buildPatchPrompt(existingItinerary, destination, userQuery)}${historyBlock}
 
 Returning options:
 - If the request asks for alternatives ("give me 2 options", "any other ideas", "what else", "a few choices"), return up to 4 DISTINCT options. Each must be a genuinely different choice — a different venue or a different approach — not a rewording of the same edit.
 - If the request asks for a specific number, return that many.
 - Otherwise return exactly ONE option.
-- Give every option a short label (max 8 words) naming the change, so the user can tell them apart at a glance.`;
+- Give every option a short label (max 8 words) naming the change, so the user can tell them apart at a glance.
+- When the user is refining an earlier option ("make the second one cheaper", "something closer to the hotel"), change THAT option and return it as the single option — don't re-offer the whole list.`;
 
   const model = getChatModel(0.2, 'gemini-3.5-flash-lite');
   if (!model) throw new Error('AI provider not configured for refine');

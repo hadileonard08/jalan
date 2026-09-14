@@ -45,10 +45,25 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       durationDays: entities.durationDays,
     };
 
+    // The drafting thread so far, so a follow-up refines the earlier options
+    // instead of starting over.
+    const history = Array.isArray(body.history)
+      ? (body.history as unknown[])
+          .filter((turn): turn is { role: string; content: string } =>
+            !!turn && typeof turn === 'object' && typeof (turn as any).content === 'string',
+          )
+          .slice(-10)
+          .map((turn) => ({
+            role: turn.role === 'assistant' ? ('assistant' as const) : ('user' as const),
+            content: String(turn.content).slice(0, 600),
+          }))
+      : [];
+
     const options = await generateItineraryPatchOptions(
       itinerary,
       trip.destination || 'the destination',
       day ? `Day ${day}: ${prompt.trim()}` : prompt.trim(),
+      history,
     );
 
     // Check the itinerary before the change once, so each option can be compared

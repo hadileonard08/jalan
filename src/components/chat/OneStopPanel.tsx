@@ -483,7 +483,7 @@ function DayPanel({
   proposals: TripProposal[];
   submittingDay: number | null;
   onSubmitProposal: (day: number, prompt: string, patch?: ItineraryPatch) => Promise<boolean>;
-  onPreviewProposal: (day: number, prompt: string) => Promise<PatchPreview | null>;
+  onPreviewProposal: (day: number, prompt: string, history: DraftMessage[]) => Promise<PatchPreview | null>;
   onSendApprovedProposal: (day: number, prompt: string, patch: ItineraryPatch) => Promise<boolean>;
   onReviewProposal: (proposalId: string, action: 'accept' | 'reject') => void;
   onEditProposal: (proposalId: string, prompt: string) => Promise<boolean>;
@@ -582,7 +582,7 @@ function ItineraryTab({
   proposals: TripProposal[];
   submittingDay: number | null;
   onSubmitProposal: (day: number, prompt: string, patch?: ItineraryPatch) => Promise<boolean>;
-  onPreviewProposal: (day: number, prompt: string) => Promise<PatchPreview | null>;
+  onPreviewProposal: (day: number, prompt: string, history: DraftMessage[]) => Promise<PatchPreview | null>;
   onSendApprovedProposal: (day: number, prompt: string, patch: ItineraryPatch) => Promise<boolean>;
   onReviewProposal: (proposalId: string, action: 'accept' | 'reject') => void;
   onEditProposal: (proposalId: string, prompt: string) => Promise<boolean>;
@@ -1237,6 +1237,15 @@ interface PatchPreview {
   options: PatchOption[];
 }
 
+// One exchange in the drafting chat: what was asked, and what came back.
+interface SuggestionTurn {
+  prompt: string;
+  options: PatchOption[];
+  selected: number;
+}
+
+type DraftMessage = { role: 'user' | 'assistant'; content: string };
+
 const ROLE_LABELS: Record<TripRole, string> = {
   owner: 'Master Planner',
   collaborator: 'Follower',
@@ -1440,7 +1449,7 @@ function DayProposalBox({
   role: TripRole | null;
   proposals: TripProposal[];
   submitting: boolean;
-  onPreview: (day: number, prompt: string) => Promise<PatchPreview | null>;
+  onPreview: (day: number, prompt: string, history: DraftMessage[]) => Promise<PatchPreview | null>;
   onSendApproved: (day: number, prompt: string, patch: ItineraryPatch) => Promise<boolean>;
   onSubmit: (day: number, prompt: string) => Promise<boolean>;
   onReview: (proposalId: string, action: 'accept' | 'reject') => void;
@@ -1450,161 +1459,187 @@ function DayProposalBox({
   userId?: string;
 }) {
   const [input, setInput] = useState('');
-  const [preview, setPreview] = useState<PatchPreview | null>(null);
-  const [selectedOption, setSelectedOption] = useState(0);
-  const [previewing, setPreviewing] = useState(false);
-  const [sending, setSending] = useState(false);
+  // The drafting chat for this day. Each AI turn offers patches to pick from, and
+  // the suggester can keep refining before anything reaches the Master Planner.
+  const [turns, setTurns] = useState<SuggestionTurn[]>([]);
+  const [thinking, setThinking] = useState(false);
+  const [sendingTurn, setSendingTurn] = useState<number | null>(null);
   const canReview = canReviewRole(role);
-  // Only the suggester whose change needs someone else's approval confirms it
-  // first — the Master Planner reviews their own suggestions in the same panel.
-  const needsConfirm = role === 'collaborator';
+  // The Master Planner's own suggestion goes straight in — they review it in this
+  // same panel, so drafting a proposal for themselves is friction.
+  const draftsInChat = role === 'collaborator';
 
   if (role === null) return null;
 
-  const submit = async () => {
-    if (!input.trim() || submitting || previewing) return;
+  const send = async () => {
+    const prompt = input.trim();
+    if (!prompt || submitting || thinking) return;
 
-    if (!needsConfirm) {
-      if (await onSubmit(day, input)) setInput('');
+    if (!draftsInChat) {
+      if (await onSubmit(day, prompt)) setInput('');
       return;
     }
 
-    setPreviewing(true);
-    const result = await onPreview(day, input);
-    setPreviewing(false);
-    if (result) {
-      setSelectedOption(0);
-      setPreview(result);
-    }
-  };
-
-  const chosen = preview?.options[selectedOption] || preview?.options[0] || null;
-
-  const confirmSend = async () => {
-    if (!chosen || sending) return;
-    setSending(true);
-    const ok = await onSendApproved(day, preview!.prompt, chosen.patch);
-    setSending(false);
-    if (ok) {
-      setPreview(null);
+    setThinking(true);
+    const history: DraftMessage[] = turns.flatMap((turn) => [
+      { role: 'user' as const, content: turn.prompt },
+      {
+        role: 'assistant' as const,
+        content: turn.options.map((o) => `- ${o.label}: ${formatPatchPreview(o.patch)}`).join('\n'),
+      },
+    ]);
+    const result = await onPreview(day, prompt, history);
+    setThinking(false);
+    if (result?.options?.length) {
+      setTurns((prev) => [...prev, { prompt, options: result.options, selected: 0 }]);
       setInput('');
     }
   };
 
+  const sendTurn = async (index: number) => {
+    const turn = turns[index];
+    const option = turn?.options[turn.selected];
+    if (!option || sendingTurn !== null) return;
+    setSendingTurn(index);
+    const ok = await onSendApproved(day, turn.prompt, option.patch);
+    setSendingTurn(null);
+    if (ok) {
+      // Sent — it now shows as a pending suggestion above, so clear the draft.
+      setTurns([]);
+      setInput('');
+    }
+  };
+
+  const selectOption = (turnIndex: number, optionIndex: number) => {
+    setTurns((prev) => prev.map((t, i) => (i === turnIndex ? { ...t, selected: optionIndex } : t)));
+  };
+
   return (
-    <div className="mt-3 pt-3 border-t border-gray-100 dark:border-gray-700/50 space-y-2">
-      <div className="flex items-center gap-1.5 text-[12px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
-        <Sparkles size={12} className="text-blue-600" /> Suggest a change
+    <div className="space-y-2">
+      <div className="flex items-center gap-2 text-[13px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+        <Sparkles size={14} /> Suggest a change
       </div>
-      {preview ? (
-        <div className="rounded-xl border border-blue-200 dark:border-blue-800/50 bg-blue-50/60 dark:bg-blue-900/15 p-2.5 space-y-2">
-          <div className="text-[12px] font-semibold text-gray-900 dark:text-gray-100">
-            {preview.options.length > 1
-              ? `Pick one to send to the Master Planner (${preview.options.length} options)`
-              : 'Send this to the Master Planner?'}
-          </div>
-          <div className="text-[13px] text-gray-700 dark:text-gray-300">&ldquo;{preview.prompt}&rdquo;</div>
 
-          {/* Several options: pick the one to suggest. */}
-          {preview.options.length > 1 ? (
-            <div className="space-y-1.5">
-              {preview.options.map((option, i) => (
+      {turns.map((turn, i) => {
+        const chosen = turn.options[turn.selected] || turn.options[0];
+        return (
+          <div key={i} className="space-y-1.5">
+            <div className="text-[13px] text-gray-700 dark:text-gray-300 break-words">
+              <span className="font-medium text-gray-500 dark:text-gray-400">You: </span>
+              {turn.prompt}
+            </div>
+            <div className="rounded-xl border border-blue-200 dark:border-blue-800/50 bg-blue-50/60 dark:bg-blue-900/15 p-2.5 space-y-2">
+              <div className="text-[12px] font-semibold text-gray-900 dark:text-gray-100">
+                {turn.options.length > 1
+                  ? `Pick one to send (${turn.options.length} options)`
+                  : 'Send this to the Master Planner?'}
+              </div>
+
+              {turn.options.length > 1 ? (
+                <div className="space-y-1.5">
+                  {turn.options.map((option, oi) => (
+                    <button
+                      key={oi}
+                      onClick={() => selectOption(i, oi)}
+                      aria-pressed={turn.selected === oi}
+                      className={`w-full text-left rounded-lg border p-2 transition-colors ${
+                        turn.selected === oi
+                          ? 'border-blue-400 bg-white dark:bg-gray-900/60'
+                          : 'border-gray-200 dark:border-gray-700 hover:border-blue-300'
+                      }`}
+                    >
+                      <div className="text-[12px] font-medium text-gray-900 dark:text-gray-100">
+                        {option.label || `Option ${oi + 1}`}
+                      </div>
+                      <div className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">
+                        {formatPatchPreview(option.patch)}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-[12px] text-gray-600 dark:text-gray-400 bg-white/70 dark:bg-gray-900/40 rounded-lg p-2">
+                  <span className="font-medium text-gray-600 dark:text-gray-300">AI patch:</span>{' '}
+                  {chosen ? formatPatchPreview(chosen.patch) : '—'}
+                </div>
+              )}
+
+              {chosen && !chosen.wouldChange && (
+                <div className="text-[11px] text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 rounded-lg px-2 py-1.5">
+                  This doesn&apos;t match anything in the itinerary yet, so the Master Planner may not
+                  be able to apply it. Naming the day or the exact stop usually helps.
+                </div>
+              )}
+              {!!chosen?.findings?.feedback.length && (
+                <div className="text-[11px] text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-900/20 rounded-lg px-2 py-1.5 space-y-1">
+                  <div className="font-semibold">This would be flagged by the itinerary checks:</div>
+                  {chosen.findings.feedback.map((f, fi) => (
+                    <div key={fi}>• {f}</div>
+                  ))}
+                </div>
+              )}
+              {!!chosen?.findings?.advisory.length && (
+                <div className="text-[11px] text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 rounded-lg px-2 py-1.5 space-y-1">
+                  <div className="font-semibold">Worth a look:</div>
+                  {chosen.findings.advisory.map((f, fi) => (
+                    <div key={fi}>• {f}</div>
+                  ))}
+                </div>
+              )}
+
+              <div className="flex items-center gap-2">
                 <button
-                  key={i}
-                  onClick={() => setSelectedOption(i)}
-                  aria-pressed={selectedOption === i}
-                  className={`w-full text-left rounded-lg border p-2 transition-colors ${
-                    selectedOption === i
-                      ? 'border-blue-400 bg-white dark:bg-gray-900/60'
-                      : 'border-gray-200 dark:border-gray-700 hover:border-blue-300'
-                  }`}
+                  onClick={() => setTurns((prev) => prev.filter((_, ti) => ti !== i))}
+                  disabled={sendingTurn !== null}
+                  className="flex-1 px-3 py-1.5 text-[13px] font-medium rounded-lg text-gray-600 dark:text-gray-300 hover:bg-white dark:hover:bg-gray-700 disabled:opacity-50"
                 >
-                  <div className="text-[12px] font-medium text-gray-900 dark:text-gray-100">
-                    {option.label || `Option ${i + 1}`}
-                  </div>
-                  <div className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">
-                    {formatPatchPreview(option.patch)}
-                  </div>
+                  Discard
                 </button>
-              ))}
+                <button
+                  onClick={() => sendTurn(i)}
+                  disabled={sendingTurn !== null}
+                  className="flex-1 px-3 py-1.5 text-[13px] font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-1.5"
+                >
+                  {sendingTurn === i ? <span className="animate-spin">⟳</span> : <Check size={13} />}
+                  Send for approval
+                </button>
+              </div>
             </div>
-          ) : (
-            <div className="text-[12px] text-gray-600 dark:text-gray-400 bg-white/70 dark:bg-gray-900/40 rounded-lg p-2">
-              <span className="font-medium text-gray-600 dark:text-gray-300">AI patch:</span>{' '}
-              {chosen ? formatPatchPreview(chosen.patch) : '—'}
-            </div>
-          )}
+          </div>
+        );
+      })}
 
-          {chosen && !chosen.wouldChange && (
-            <div className="text-[11px] text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 rounded-lg px-2 py-1.5">
-              This doesn&apos;t match anything in the itinerary yet, so the Master Planner may not be
-              able to apply it. Naming the day or the exact stop usually helps.
-            </div>
-          )}
-          {/* Same deterministic checks the generation pipeline runs. `feedback`
-              is what would make the pipeline regenerate; `advisory` is a hint. */}
-          {!!chosen?.findings?.feedback.length && (
-            <div className="text-[11px] text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-900/20 rounded-lg px-2 py-1.5 space-y-1">
-              <div className="font-semibold">This would be flagged by the itinerary checks:</div>
-              {chosen.findings.feedback.map((f, i) => (
-                <div key={i}>• {f}</div>
-              ))}
-            </div>
-          )}
-          {!!chosen?.findings?.advisory.length && (
-            <div className="text-[11px] text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 rounded-lg px-2 py-1.5 space-y-1">
-              <div className="font-semibold">Worth a look:</div>
-              {chosen.findings.advisory.map((f, i) => (
-                <div key={i}>• {f}</div>
-              ))}
-            </div>
-          )}
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setPreview(null)}
-              disabled={sending}
-              className="flex-1 px-3 py-1.5 text-[13px] font-medium rounded-lg text-gray-600 dark:text-gray-300 hover:bg-white dark:hover:bg-gray-700 disabled:opacity-50"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={confirmSend}
-              disabled={sending}
-              className="flex-1 px-3 py-1.5 text-[13px] font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-1.5"
-            >
-              {sending ? <span className="animate-spin">⟳</span> : <Check size={13} />}
-              Send for approval
-            </button>
-          </div>
+      {thinking && (
+        <div className="text-[12px] text-gray-500 dark:text-gray-400 flex items-center gap-1.5">
+          <span className="animate-spin">⟳</span> Drafting…
         </div>
-      ) : (
-        <>
-          <div className="flex items-end gap-2">
-            <AutoGrowTextarea
-              value={input}
-              onChange={setInput}
-              onSubmit={submit}
-              placeholder="Change something..."
-              disabled={submitting || previewing}
-              ariaLabel={`Suggest a change for Day ${day}`}
-            />
-            <button
-              onClick={submit}
-              disabled={submitting || previewing || !input.trim()}
-              className="flex-shrink-0 px-3.5 py-2 text-[13px] font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1.5"
-            >
-              {submitting || previewing ? <span className="animate-spin">⟳</span> : <Sparkles size={13} />}
-              {previewing ? 'Drafting…' : 'Suggest'}
-            </button>
-          </div>
-          <div className="text-[11px] text-gray-400 dark:text-gray-500">
-            {role === 'collaborator'
-              ? 'You’ll see the AI’s change first — ask for options to compare alternatives.'
-              : 'Enter to send · Shift+Enter for a new line · ask for options to compare.'}
-          </div>
-        </>
       )}
-      {proposals.length > 0 && (
+
+      <div className="flex items-end gap-2">
+        <AutoGrowTextarea
+          value={input}
+          onChange={setInput}
+          onSubmit={send}
+          placeholder={turns.length ? 'Refine it, or ask for more options...' : 'Change something...'}
+          disabled={submitting || thinking}
+          ariaLabel={`Suggest a change for Day ${day}`}
+        />
+        <button
+          onClick={send}
+          disabled={submitting || thinking || !input.trim()}
+          className="flex-shrink-0 px-3.5 py-2 text-[13px] font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1.5"
+        >
+          {thinking ? <span className="animate-spin">⟳</span> : <Sparkles size={13} />}
+          {thinking ? 'Drafting…' : 'Suggest'}
+        </button>
+      </div>
+      <div className="text-[11px] text-gray-400 dark:text-gray-500">
+        {draftsInChat
+          ? 'Nothing is sent until you pick an option — ask for alternatives to compare.'
+          : 'Enter to send · Shift+Enter for a new line.'}
+      </div>
+
+      {canReview && proposals.length > 0 && (
         <div className="space-y-2 pt-1">
           {proposals.map((proposal) => (
             <ProposalCard
@@ -2064,12 +2099,12 @@ function SavedTripCard({ trip, onUpdate, onDelete, onLeave, onPayloadRefresh, is
   const pendingProposals = proposals.filter((p) => p.status === 'pending');
 
   // Drafts the AI patch without sending it, so the suggester can check it first.
-  const previewProposal = async (day: number, prompt: string): Promise<PatchPreview | null> => {
+  const previewProposal = async (day: number, prompt: string, history: DraftMessage[]): Promise<PatchPreview | null> => {
     try {
       const res = await fetch(`/api/saved-trips/${trip.id}/proposals/preview`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: prompt.trim(), dayIndex: day }),
+        body: JSON.stringify({ prompt: prompt.trim(), dayIndex: day, history }),
       });
       const data = await res.json();
       if (!res.ok) {
