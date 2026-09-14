@@ -580,6 +580,7 @@ src/
     itinerary-cleanup.ts     # Strips trailing AI follow-up questions from saved itineraries
     refresh-enrichment.ts    # Rebuilds a day's hero image, route links, map waypoints and transport notes after an approved edit
     proposal-review.ts       # Concurrency guards: atomic proposal claim + compare-and-swap on the itinerary payload
+    venue-status.ts          # Are venues still open? OSM/Overpass closure tags + real opening hours
     trip-ownership.ts        # Master Planner handover: moves saved_trips.user_id and fixes up member rows
     ai-provider.ts           # LLM model configuration (hybrid: speed + quality models)
     ragEvaluator.ts          # Typed RAG Triad LLM-as-a-judge evaluation
@@ -626,6 +627,7 @@ scripts/
   test-interrupt-loop.ts     # interrupt()/resume mechanics: suspension, resume, pre-interrupt node does not re-run
   test-date-window.ts        # Seasonal windows ("spring 2027"), when the date fallback may invent a date, and the deterministic itinerary-vs-requested date check
   test-refresh-enrichment.ts # Post-approval refresh: affected days, note de-duplication, stale hero-image detection
+  test-venue-status.ts       # Venue open/closed and real opening hours (OSM/Overpass, Wikipedia fallback)
   test-review-concurrency.ts # Concurrent review guards, with real parallel calls against Postgres
   test-trip-access.ts        # Roles: Master Planner vs Follower, incl. legacy owner-row downgrade
   test-ownership-transfer.ts # Master Planner handover: guards, both stay/leave modes, racing transfers

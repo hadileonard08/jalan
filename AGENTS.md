@@ -110,6 +110,15 @@ npx tsx scripts/smoke-test.ts
 - **Packing tips merge into last day.** The packing list was appended with only a blank line after the itinerary, making it look like part of the last day's content. Fixed by adding a `---` horizontal rule and a `## Packing Tips` heading as a clear separator.
 - **Economy cabin forced "budget-friendly" language.** The itinerary prompt used to inject "budget-friendly" style for all ECONOMY cabin requests, even luxury honeymoons. Now the style is based on the budget field, not the cabin class.
 
+### Venue status (is it still open?)
+- **Nothing checked this before.** The guardrails only confirmed a venue *exists* (Wikipedia/OSM name lookup), and the Critic has no opening-status context — so SIFF Cinema Egyptian, permanently closed, passed every check.
+- **Primary source is OpenStreetMap via Overpass** (`src/lib/venue-status.ts`), because it is structured and bulk: one union query covers every venue in a trip. It returns closure tags (`disused:*`, `abandoned:*`, `was:*`, `end_date`) and, for open venues, real `opening_hours`.
+- Wikipedia is the fallback for venues OSM doesn't know (prose tense check, 2 requests per venue, prone to 429s — add backoff, and treat a throttled response as "no answer", never as "closed").
+- `latestClosingMinutes()` parses `opening_hours` conservatively: it bails out on `sunrise/sunset`, `[`, `||`, `+`, `@`, and takes the LATEST closing across the week so day-specific hours can't cause a false positive. `findEveningHoursConflicts()` flags an Evening stop whose venue shuts by 19:00.
+- Layered with the older name-based heuristic in `itinerary-feasibility.ts`: real hours win, and the heuristic is dropped for any venue that has them.
+- **Advisory only** — never a regeneration trigger, since OSM coverage is uneven and mapper-maintained.
+- Test: `npx tsx scripts/test-venue-status.ts` (pure parsing tests always run; the live Overpass section reports SKIP when throttled rather than failing).
+
 ### RAG Evaluation
 - **The judge must not do arithmetic.** `evaluateRag()` now receives the requested destination/dates/interests, and the evaluator prompt explicitly forbids magnitude estimates ("off by 1.5 years", "20% cheaper"). Anything a number is needed for should be computed deterministically in Guardrails instead. The judge's prose is a hint, never a fact — see the date-handling note above.
 - **Zod `$ref` breaks Gemini structured output.** The RAG evaluator's zod schema used shared sub-schemas that generated `$ref` in the JSON schema. Gemini's API doesn't support `$ref`. Fixed by inlining each metric (contextRelevance, groundedness, answerRelevance) with explicit score/reasoning fields.

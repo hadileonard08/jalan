@@ -1,5 +1,5 @@
 import { verifyItineraryLandmarks, extractLandmarkNames } from './itinerary-guardrails';
-import { findPossiblyClosedVenues } from '../lib/venue-status';
+import { fetchVenueStatus, findEveningHoursConflicts } from '../lib/venue-status';
 import { eveningFeasibilityWarnings } from '../lib/itinerary-feasibility';
 
 // Deterministic itinerary checks, shared by the generation graph and by the
@@ -208,14 +208,34 @@ export async function runItineraryChecks({
   }
 
   // Advisory only: venues that close in the late afternoon sitting in the Evening.
-  const advisory = eveningFeasibilityWarnings(itinerary);
+  // Name-based, so it stays useful for venues with no opening-hours data.
+  let advisory = eveningFeasibilityWarnings(itinerary);
 
-  // Advisory only: venues whose Wikipedia article reads like they have closed.
-  // Nothing else in the pipeline checks this — the guardrails only confirm a
-  // venue exists, and the Critic has no opening-status context to judge.
+  // Advisory only, and the only thing that answers "is this still open?" — the
+  // guardrails merely confirm a venue exists, and the Critic has no
+  // opening-status context to judge.
   if (includeVenueStatus) {
-    const closed = await findPossiblyClosedVenues(extractLandmarkNames(landmarkScope || itinerary));
-    advisory.push(...closed.map((hint) => `${hint.name} — ${hint.reason}. Worth confirming before you go.`));
+    const names = extractLandmarkNames(landmarkScope || itinerary);
+    const statuses = await fetchVenueStatus(names, destination);
+
+    // Real hours beat the name heuristic, so drop its guess for any venue we
+    // have actual data for (either way, the precise finding replaces it).
+    const covered = new Set([...statuses.keys()].map((n) => n.toLowerCase()));
+    advisory = advisory.filter(
+      (warning) => ![...covered].some((name) => warning.toLowerCase().includes(name)),
+    );
+
+    advisory.push(
+      ...findEveningHoursConflicts(itinerary, statuses).map(
+        (conflict) =>
+          `${conflict.name} (Day ${conflict.day}) closes at ${conflict.closesAt} (${conflict.hours}), so it can't be an Evening stop.`,
+      ),
+    );
+
+    for (const status of statuses.values()) {
+      if (!status.closed) continue;
+      advisory.push(`${status.name} may have closed — ${status.closed}. Worth confirming before you go.`);
+    }
   }
 
   return { feedback, advisory };
