@@ -1638,12 +1638,18 @@ function ProposalCard({
             {proposal.suggestedPrompt}
           </div>
 
-          {/* The AI's answer to it, in its own container. */}
+          {/* The AI's answer to it, in its own container. The conversational
+              line (aiMessage) leads; the mechanical patch summary is the detail. */}
           <div className="rounded-lg bg-blue-50 dark:bg-blue-900/20 p-3">
             <div className="text-[11px] font-semibold uppercase tracking-wide text-blue-700 dark:text-blue-300">
               Suggested update
             </div>
-            <div className="text-[13px] leading-6 text-blue-900 dark:text-blue-100 mt-1 whitespace-pre-wrap break-words">
+            {proposal.summary && (
+              <div className="text-[13px] leading-6 text-blue-900 dark:text-blue-100 mt-1 whitespace-pre-wrap break-words">
+                {proposal.summary}
+              </div>
+            )}
+            <div className={`text-[12px] leading-5 text-blue-800/80 dark:text-blue-200/80 whitespace-pre-wrap break-words ${proposal.summary ? 'mt-1' : 'mt-1'}`}>
               {summary}
             </div>
           </div>

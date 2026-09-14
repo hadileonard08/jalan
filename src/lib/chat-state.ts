@@ -39,6 +39,15 @@ import { z } from 'zod';
 // them to the existing itinerary markdown.
 
 export const ItineraryPatchSchema = z.object({
+  // Conversational one-liner shown in the chat bubble next to the patch.
+  //
+  // Optional on purpose: this schema also validates the patch a client sends back
+  // (POST /proposals) and describes every patch already stored in the database,
+  // so making it required would reject old rows and any in-flight client.
+  aiMessage: z
+    .string()
+    .optional()
+    .describe('A friendly, conversational one-sentence summary of the proposed changes to display to the user.'),
   edits: z.array(
     z.object({
       dayNumber: z.number().int().min(1).describe('The day number to edit (1-indexed)'),
@@ -256,6 +265,8 @@ export interface TripProposal {
   status: ProposalStatus;
   suggestedPrompt: string;
   patchData: ItineraryPatch;
+  /** The AI's conversational one-liner for the chat bubble. */
+  summary?: string | null;
   createdAt: string;
   // When the Master Planner decided; null while pending.
   reviewedAt?: string | null;

@@ -200,6 +200,10 @@ export const tripProposals = pgTable('trip_proposals', {
   status: proposalStatusEnum('status').notNull().default('pending'),
   suggestedPrompt: text('suggested_prompt').notNull(),
   patchData: jsonb('patch_data').notNull(),
+  // The AI's conversational one-liner for the chat bubble, so the feed can show
+  // it without re-deriving it from the patch. Nullable: rows created before this
+  // existed have none.
+  summary: text('summary'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   // When the Master Planner decided. Null while still pending, and reset if they
   // change their mind, so the UI can say when a decision was made.

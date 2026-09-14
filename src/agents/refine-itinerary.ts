@@ -410,6 +410,9 @@ Answering vs editing:
 - If the user wants something changed, put the edits in \`options\` and leave \`answer\` out.
 - Never answer a question by silently editing the itinerary, and never edit when they only asked something.
 
+The aiMessage field:
+- Always fill \`aiMessage\` with ONE friendly sentence describing what changes, written to the traveller ("I'll swap the museum for the aquarium on Day 2."). It is shown in a chat bubble next to the edit, so keep it human — no JSON, no field names.
+
 Returning options:
 - If the request asks for alternatives ("give me 2 options", "any other ideas", "what else", "a few choices"), return up to 4 DISTINCT options. Each must be a genuinely different choice — a different venue or a different approach — not a rewording of the same edit.
 - If the request asks for a specific number, return that many.
@@ -426,7 +429,12 @@ Returning options:
 
   return {
     answer: parsed.answer?.trim() || undefined,
-    options: meaningfulPatchOptions(parsed.options),
+    // Fall back to the option label — the model already writes a short one, and a
+    // chat bubble with no text is worse than a terse one.
+    options: meaningfulPatchOptions(parsed.options).map((option) => ({
+      ...option,
+      patch: { ...option.patch, aiMessage: option.patch.aiMessage?.trim() || option.label },
+    })),
   };
 }
 

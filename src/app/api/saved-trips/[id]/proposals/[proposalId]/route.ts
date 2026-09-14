@@ -20,6 +20,7 @@ function serializeProposal(row: typeof tripProposals.$inferSelect) {
     status: row.status,
     suggestedPrompt: row.suggestedPrompt,
     patchData: row.patchData,
+    summary: row.summary,
     createdAt: row.createdAt.toISOString(),
     reviewedAt: row.reviewedAt ? row.reviewedAt.toISOString() : null,
   };

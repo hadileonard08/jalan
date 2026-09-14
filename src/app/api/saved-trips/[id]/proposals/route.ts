@@ -17,6 +17,7 @@ function serializeProposal(row: typeof tripProposals.$inferSelect) {
     status: row.status,
     suggestedPrompt: row.suggestedPrompt,
     patchData: row.patchData,
+    summary: row.summary,
     createdAt: row.createdAt.toISOString(),
     reviewedAt: row.reviewedAt ? row.reviewedAt.toISOString() : null,
   };
@@ -110,6 +111,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const [proposal] = await db
       .insert(tripProposals)
       .values({
+        summary: patch.aiMessage || null,
         tripId,
         proposedByUserId: userId,
         suggestedPrompt: prompt.trim(),
