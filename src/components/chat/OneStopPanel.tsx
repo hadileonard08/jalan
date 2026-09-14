@@ -17,6 +17,7 @@ import type {
 } from '@/lib/chat-state';
 import { stripFollowUpQuestions } from '@/lib/itinerary-cleanup';
 import { findEveningClosedVenues } from '@/lib/itinerary-feasibility';
+import { buildTripFeed } from '@/lib/trip-feed';
 import type { DayTransport } from '@/agents/transport';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -317,6 +318,286 @@ function getDayFeedback(trip: SavedTrip, dayIndex: number): DayFeedback {
   };
 }
 
+// Jalan's reply: the conversational line leads, the exact edits sit behind a
+// toggle so the bubble stays short but the detail is one tap away.
+function AgentBubble({
+  proposal,
+  canReview,
+  canEdit,
+  actionId,
+  onReview,
+  onEdit,
+  onWithdraw,
+}: {
+  proposal: TripProposal;
+  canReview: boolean;
+  canEdit: boolean;
+  actionId: string | null;
+  onReview: (proposalId: string, action: 'accept' | 'reject') => void;
+  onEdit: (proposalId: string, prompt: string) => Promise<boolean>;
+  onWithdraw: (proposalId: string) => void;
+}) {
+  const [showDetails, setShowDetails] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(proposal.suggestedPrompt);
+  const [regenerating, setRegenerating] = useState(false);
+  const pending = proposal.status === 'pending';
+  const dialogue = proposal.summary || formatPatchPreview(proposal.patchData);
+  const busy = actionId === proposal.id;
+
+  const saveEdit = async () => {
+    if (!draft.trim() || regenerating) return;
+    setRegenerating(true);
+    const ok = await onEdit(proposal.id, draft.trim());
+    setRegenerating(false);
+    if (ok) setEditing(false);
+  };
+
+  return (
+    <div className="self-start max-w-[90%] rounded-2xl rounded-tl-sm border border-indigo-100 dark:border-indigo-900 bg-indigo-50 dark:bg-indigo-950 px-4 py-3 space-y-2">
+      <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-indigo-500 dark:text-indigo-300">
+        <Sparkles size={12} /> Jalan
+      </div>
+
+      <div className="text-sm leading-6 text-indigo-950 dark:text-indigo-100 whitespace-pre-wrap break-words">
+        {dialogue}
+      </div>
+
+      {editing ? (
+        <div className="space-y-2">
+          <AutoGrowTextarea
+            value={draft}
+            onChange={setDraft}
+            onSubmit={saveEdit}
+            placeholder="Describe the change..."
+            disabled={regenerating}
+            ariaLabel="Edit this suggestion"
+            autoFocus
+          />
+          <div className="flex items-center gap-2">
+            <button
+              onClick={saveEdit}
+              disabled={regenerating || !draft.trim()}
+              className="flex-1 px-3 py-1.5 text-[13px] font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+            >
+              {regenerating ? 'Regenerating…' : 'Regenerate'}
+            </button>
+            <button
+              onClick={() => { setEditing(false); setDraft(proposal.suggestedPrompt); }}
+              disabled={regenerating}
+              className="px-3 py-1.5 text-[13px] font-medium rounded-lg text-gray-500 dark:text-gray-400 hover:bg-white/60 dark:hover:bg-gray-800 disabled:opacity-50"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <button
+            onClick={() => setShowDetails((v) => !v)}
+            aria-expanded={showDetails}
+            className="flex items-center gap-1 text-[11px] font-medium text-indigo-500 dark:text-indigo-300 hover:underline"
+          >
+            {showDetails ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+            {showDetails ? 'Hide the exact edits' : 'See the exact edits'}
+          </button>
+          {showDetails && (
+            <div className="rounded-lg bg-white/70 dark:bg-gray-900/40 px-2.5 py-2 text-[12px] leading-5 text-indigo-900/80 dark:text-indigo-200/80 whitespace-pre-wrap break-words">
+              {formatPatchPreview(proposal.patchData)}
+            </div>
+          )}
+        </>
+      )}
+
+      {pending && canReview && !editing && (
+        <div className="flex items-center gap-2 pt-0.5">
+          <button
+            onClick={() => onReview(proposal.id, 'accept')}
+            disabled={busy}
+            className="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 text-[13px] font-medium rounded-lg bg-green-600 text-white hover:bg-green-700 disabled:opacity-60"
+          >
+            {busy ? <span className="animate-spin">⟳</span> : <CheckSquare size={13} />}
+            Accept
+          </button>
+          <button
+            onClick={() => onReview(proposal.id, 'reject')}
+            disabled={busy}
+            className="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 text-[13px] font-medium rounded-lg text-red-600 dark:text-red-400 border border-red-200 dark:border-red-900/50 hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-60"
+          >
+            <X size={13} />
+            Reject
+          </button>
+        </div>
+      )}
+
+      {/* Resolved: no actions, just how it ended. */}
+      {!pending && (
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className={`text-xs px-2 py-1 rounded-full ${PROPOSAL_STATUS_STYLES[proposal.status]}`}>
+            {proposal.status}
+          </span>
+          {proposal.reviewedAt && (
+            <span className="text-[11px] text-indigo-400 dark:text-indigo-300/70">
+              {formatDateTime(proposal.reviewedAt)}
+            </span>
+          )}
+          {/* A rejection can be reversed — the itinerary was never touched. */}
+          {canReview && proposal.status === 'rejected' && (
+            <button
+              onClick={() => onReview(proposal.id, 'accept')}
+              disabled={busy}
+              className="text-[12px] font-medium text-blue-600 dark:text-blue-400 hover:underline disabled:opacity-50"
+            >
+              {busy ? 'Applying…' : 'Accept anyway'}
+            </button>
+          )}
+        </div>
+      )}
+
+      {pending && canEdit && !editing && (
+        <div className="flex items-center gap-3 pt-0.5">
+          <button
+            onClick={() => setEditing(true)}
+            className="text-[12px] font-medium text-blue-600 dark:text-blue-400 hover:underline"
+          >
+            Edit & regenerate
+          </button>
+          <button
+            onClick={() => onWithdraw(proposal.id)}
+            className="text-[12px] font-medium text-gray-400 dark:text-gray-500 hover:text-red-600 hover:underline"
+          >
+            Withdraw
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// A freshly drafted suggestion: Jalan's options, waiting for you to pick one.
+function DraftBubble({
+  turn,
+  index,
+  canApplyDirectly,
+  sending,
+  onSelect,
+  onSend,
+  onDiscard,
+}: {
+  turn: SuggestionTurn;
+  index: number;
+  canApplyDirectly: boolean;
+  sending: boolean;
+  onSelect: (optionIndex: number) => void;
+  onSend: () => void;
+  onDiscard: () => void;
+}) {
+  const chosen = turn.options[turn.selected] || turn.options[0];
+  return (
+    <div className="self-start max-w-[90%] rounded-2xl rounded-tl-sm border border-indigo-100 dark:border-indigo-900 bg-indigo-50 dark:bg-indigo-950 px-4 py-3 space-y-2">
+      <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-indigo-500 dark:text-indigo-300">
+        <Sparkles size={12} /> Jalan
+      </div>
+
+      {turn.answer && (
+        <div className="text-sm leading-6 text-indigo-950 dark:text-indigo-100 whitespace-pre-wrap break-words">
+          {turn.answer}
+        </div>
+      )}
+
+      {turn.options.length > 0 && (
+        <>
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-indigo-500 dark:text-indigo-300">
+            {turn.options.length > 1 ? `Pick one (${turn.options.length})` : 'Suggested update'}
+          </div>
+          <div className="space-y-1.5">
+            {turn.options.map((option, oi) => (
+              <button
+                key={oi}
+                onClick={() => onSelect(oi)}
+                aria-pressed={turn.selected === oi}
+                className={`w-full text-left rounded-lg border p-2 transition-colors ${
+                  turn.selected === oi
+                    ? 'border-indigo-400 bg-white dark:bg-gray-900/60'
+                    : 'border-transparent hover:border-indigo-300'
+                }`}
+              >
+                <div className="text-[12px] font-medium text-indigo-900 dark:text-indigo-100">
+                  {option.label || `Option ${oi + 1}`}
+                </div>
+                <div className="text-[11px] text-indigo-800/80 dark:text-indigo-200/80 mt-0.5">
+                  {formatPatchPreview(option.patch)}
+                </div>
+              </button>
+            ))}
+          </div>
+
+          {chosen && !chosen.wouldChange && (
+            <div className="text-[11px] text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 rounded-lg px-2 py-1.5">
+              This doesn&apos;t match anything in the itinerary yet, so the Master Planner may not be
+              able to apply it. Naming the day or the exact stop usually helps.
+            </div>
+          )}
+          {!!chosen?.findings?.feedback.length && (
+            <div className="text-[11px] text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-900/20 rounded-lg px-2 py-1.5 space-y-1">
+              <div className="font-semibold">This would be flagged by the itinerary checks:</div>
+              {chosen.findings.feedback.map((f, fi) => (
+                <div key={fi}>• {f}</div>
+              ))}
+            </div>
+          )}
+          {!!chosen?.findings?.advisory.length && (
+            <div className="text-[11px] text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 rounded-lg px-2 py-1.5 space-y-1">
+              <div className="font-semibold">Worth a look:</div>
+              {chosen.findings.advisory.map((f, fi) => (
+                <div key={fi}>• {f}</div>
+              ))}
+            </div>
+          )}
+
+          <div className="flex items-center gap-2 pt-0.5">
+            <button
+              onClick={onDiscard}
+              disabled={sending}
+              className="flex-1 px-3 py-1.5 text-[13px] font-medium rounded-lg text-gray-600 dark:text-gray-300 hover:bg-white/60 dark:hover:bg-gray-800 disabled:opacity-50"
+            >
+              Discard
+            </button>
+            <button
+              onClick={onSend}
+              disabled={sending}
+              className="flex-1 px-3 py-1.5 text-[13px] font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-1.5"
+            >
+              {sending ? <span className="animate-spin">⟳</span> : <Check size={13} />}
+              {canApplyDirectly ? 'Apply' : 'Send'}
+            </button>
+          </div>
+        </>
+      )}
+      <span className="sr-only">draft {index}</span>
+    </div>
+  );
+}
+
+// "Jalan is drafting…" while a suggestion is being generated.
+function TypingBubble() {
+  return (
+    <div className="self-start max-w-[90%] rounded-2xl rounded-tl-sm border border-indigo-100 dark:border-indigo-900 bg-indigo-50 dark:bg-indigo-950 px-4 py-3 space-y-1.5">
+      <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-indigo-500 dark:text-indigo-300">
+        <Sparkles size={12} /> Jalan
+      </div>
+      <div className="flex items-center gap-1.5" aria-label="Jalan is drafting a change">
+        <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-bounce" />
+        <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-bounce [animation-delay:-0.15s]" />
+        <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-bounce [animation-delay:-0.3s]" />
+        <span className="text-[12px] text-indigo-500 dark:text-indigo-300 ml-1">
+          Jalan is drafting a change…
+        </span>
+      </div>
+    </div>
+  );
+}
+
 // One input for the whole day: a Chat tab for comments and a Propose Change tab
 // that drafts an AI edit. They used to be two stacked boxes, which read as two
 // competing inputs.
@@ -359,8 +640,27 @@ function DayCollaboration({
   const fb = getDayFeedback(trip, day);
   const canReview = canReviewRole(role);
   const canApplyDirectly = canReview;
+  const endRef = useRef<HTMLDivElement>(null);
+  const { user } = useUser();
+
+  // One chronological timeline of this day's comments and suggestions. Merged
+  // locally with the same helper the /feed endpoint uses, so the order can't
+  // diverge — and a comment you just posted appears immediately instead of
+  // waiting for the next poll.
+  const feed = role === null
+    ? []
+    : buildTripFeed({ dayFeedback: trip.dayFeedback, proposals, day });
+
+  // Keep the newest message in view. `block: 'nearest'` scrolls this container
+  // only, rather than yanking the whole page.
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }, [feed.length, thinking, turns.length]);
 
   if (role === null) return null;
+
+  const isMine = (authorId?: string, author?: string) =>
+    authorId ? authorId === userId : author === 'You';
 
   const vote = (direction: 'up' | 'down') => {
     const current = getDayFeedback(trip, day);
@@ -390,7 +690,9 @@ function DayCollaboration({
     const current = getDayFeedback(trip, day);
     const newComment: DayComment = {
       id: crypto.randomUUID(),
-      author: 'You',
+      // The real name, so other collaborators see who said it rather than "You".
+      author: user?.fullName || user?.firstName || 'You',
+      authorId: userId,
       text,
       createdAt: new Date().toISOString(),
     };
@@ -455,8 +757,8 @@ function DayCollaboration({
   const busy = tab === 'chat' ? !input.trim() : !input.trim() || submitting || thinking;
 
   return (
-    <div className="h-full flex flex-col">
-      <div className="flex items-center gap-3 pb-2">
+    <div className="flex flex-col h-full min-h-0">
+      <div className="flex items-center gap-3 pb-2 flex-shrink-0">
         <button
           onClick={() => vote('up')}
           className={`flex items-center gap-1 text-[13px] px-2 py-1 rounded-lg transition-colors ${
@@ -487,179 +789,126 @@ function DayCollaboration({
           title="Show this day"
         >
           <MessageSquare size={14} />
-          {showComments ? 'Hide' : `View ${fb.comments.length}`}
+          {showComments ? 'Hide' : `View ${feed.length}`}
         </button>
       </div>
 
-      <div className={`flex-1 min-h-0 flex flex-col ${showComments ? 'flex' : 'hidden md:flex'}`}>
-        {/* One input, two modes. */}
-        <div className="flex items-center gap-1 border-b border-gray-100 dark:border-gray-700/50">
-          {([
-            { key: 'chat', label: 'Chat', icon: MessageSquare },
-            { key: 'propose', label: 'Propose change', icon: Sparkles },
-          ] as const).map(({ key, label, icon: Icon }) => (
-            <button
-              key={key}
-              onClick={() => setTab(key)}
-              aria-selected={tab === key}
-              role="tab"
-              className={`flex items-center gap-1.5 px-3 py-2 text-[13px] transition-colors border-b-2 -mb-px ${
-                tab === key
-                  ? 'border-blue-500 text-blue-600 dark:text-blue-400 font-medium'
-                  : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
-              }`}
-            >
-              <Icon size={13} />
-              {label}
-            </button>
-          ))}
-        </div>
-
-        <div className="flex-1 min-h-0 overflow-y-auto py-2 space-y-2">
-          {tab === 'chat' ? (
-            fb.comments.length === 0 ? (
-              <div className="text-[12px] text-gray-400 dark:text-gray-500 px-1">
-                No comments on this day yet.
-              </div>
-            ) : (
-              fb.comments.map((c) => (
-                <div key={c.id} className="flex items-start gap-2 group">
-                  <div className="flex-1 min-w-0 text-[13px] text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/50 rounded-2xl rounded-tl-sm px-3 py-2 whitespace-pre-wrap break-words">
-                    <span className="font-medium text-gray-700 dark:text-gray-300">{c.author}: </span>
-                    {c.text}
-                    <span className="text-gray-400 dark:text-gray-600 ml-1">· {formatDateTime(c.createdAt)}</span>
-                  </div>
-                  <button
-                    onClick={() => deleteComment(c.id)}
-                    className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-600 p-1"
-                  >
-                    <Trash2 size={12} />
-                  </button>
-                </div>
-              ))
-            )
-          ) : (
-            <>
-              {turns.map((turn, i) => {
-                const chosen = turn.options[turn.selected] || turn.options[0];
-                return (
-                  <div key={i} className="space-y-1.5">
-                    <div className="rounded-2xl rounded-tl-sm bg-gray-100 dark:bg-gray-700/40 px-3 py-2 text-[13px] leading-6 text-gray-700 dark:text-gray-200 whitespace-pre-wrap break-words">
-                      {turn.prompt}
-                    </div>
-                    {turn.answer && (
-                      <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/40 p-2.5 text-[13px] leading-6 text-gray-700 dark:text-gray-200 whitespace-pre-wrap break-words">
-                        {turn.answer}
-                      </div>
-                    )}
-                    {turn.options.length > 0 && (
-                      <div className="rounded-lg bg-blue-50 dark:bg-blue-900/20 p-2.5 space-y-2">
-                        <div className="text-[11px] font-semibold uppercase tracking-wide text-blue-700 dark:text-blue-300">
-                          {turn.options.length > 1
-                            ? `Suggested updates (${turn.options.length})`
-                            : 'Suggested update'}
-                        </div>
-                        <div className="space-y-1.5">
-                          {turn.options.map((option, oi) => (
-                            <button
-                              key={oi}
-                              onClick={() =>
-                                setTurns((prev) =>
-                                  prev.map((t, ti) => (ti === i ? { ...t, selected: oi } : t)),
-                                )
-                              }
-                              aria-pressed={turn.selected === oi}
-                              className={`w-full text-left rounded-lg border p-2 transition-colors ${
-                                turn.selected === oi
-                                  ? 'border-blue-400 bg-white dark:bg-gray-900/60'
-                                  : 'border-transparent hover:border-blue-300'
-                              }`}
-                            >
-                              <div className="text-[12px] font-medium text-blue-900 dark:text-blue-100">
-                                {option.label || `Option ${oi + 1}`}
-                              </div>
-                              <div className="text-[11px] text-blue-800/80 dark:text-blue-200/80 mt-0.5">
-                                {formatPatchPreview(option.patch)}
-                              </div>
-                            </button>
-                          ))}
-                        </div>
-
-                        {chosen && !chosen.wouldChange && (
-                          <div className="text-[11px] text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 rounded-lg px-2 py-1.5">
-                            This doesn&apos;t match anything in the itinerary yet, so the Master Planner
-                            may not be able to apply it. Naming the day or the exact stop usually helps.
-                          </div>
-                        )}
-                        {!!chosen?.findings?.feedback.length && (
-                          <div className="text-[11px] text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-900/20 rounded-lg px-2 py-1.5 space-y-1">
-                            <div className="font-semibold">This would be flagged by the itinerary checks:</div>
-                            {chosen.findings.feedback.map((f, fi) => (
-                              <div key={fi}>• {f}</div>
-                            ))}
-                          </div>
-                        )}
-                        {!!chosen?.findings?.advisory.length && (
-                          <div className="text-[11px] text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 rounded-lg px-2 py-1.5 space-y-1">
-                            <div className="font-semibold">Worth a look:</div>
-                            {chosen.findings.advisory.map((f, fi) => (
-                              <div key={fi}>• {f}</div>
-                            ))}
-                          </div>
-                        )}
-
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => setTurns((prev) => prev.filter((_, ti) => ti !== i))}
-                            disabled={sendingTurn !== null}
-                            className="flex-1 px-3 py-1.5 text-[13px] font-medium rounded-lg text-gray-600 dark:text-gray-300 hover:bg-white dark:hover:bg-gray-700 disabled:opacity-50"
-                          >
-                            Discard
-                          </button>
-                          <button
-                            onClick={() => sendTurn(i)}
-                            disabled={sendingTurn !== null}
-                            className="flex-1 px-3 py-1.5 text-[13px] font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-1.5"
-                          >
-                            {sendingTurn === i ? <span className="animate-spin">⟳</span> : <Check size={13} />}
-                            {canApplyDirectly ? 'Apply' : 'Send'}
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-              {thinking && (
-                <div className="text-[12px] text-gray-500 dark:text-gray-400 flex items-center gap-1.5">
-                  <span className="animate-spin">⟳</span> Thinking…
-                </div>
-              )}
-              {!turns.length && !thinking && (
-                <div className="text-[12px] text-gray-400 dark:text-gray-500 px-1">
-                  Ask about this day, or describe a change — for example &ldquo;give me 2 options for the
-                  evening&rdquo;.
-                </div>
-              )}
-            </>
+      <div className={`flex-1 min-h-0 flex-col ${showComments ? 'flex' : 'hidden md:flex'}`}>
+        <div className="flex flex-col gap-3 overflow-y-auto p-1 h-[420px] md:h-[500px]">
+          {feed.length === 0 && !thinking && (
+            <div className="text-[12px] text-gray-400 dark:text-gray-500 px-1">
+              No messages yet. Post a comment, or switch to Propose change to ask for an edit.
+            </div>
           )}
 
-          {/* The day's suggestions, in both tabs — they are the outcome either way. */}
-          {proposals.map((proposal) => (
-            <ProposalCard
-              key={proposal.id}
-              proposal={proposal}
-              canReview={canReview}
-              canEdit={!!userId && proposal.proposedByUserId === userId}
-              actionId={actionId}
-              onReview={onReview}
-              onEdit={onEdit}
-              onWithdraw={onWithdraw}
+          {feed.map((item) => {
+            if (item.type === 'comment') {
+              const mine = isMine(item.data.comment?.authorId, item.author);
+              return (
+                <div key={item.id} className={`flex flex-col gap-1 max-w-[85%] ${mine ? 'self-end items-end' : 'self-start items-start'}`}>
+                  {!mine && (
+                    <span className="text-[11px] font-medium text-gray-500 dark:text-gray-400 px-1">
+                      {item.author}
+                    </span>
+                  )}
+                  <div
+                    className={
+                      mine
+                        ? 'bg-blue-600 text-white rounded-2xl rounded-tr-sm px-4 py-2 text-sm leading-6 whitespace-pre-wrap break-words'
+                        : 'bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-gray-100 rounded-2xl rounded-tl-sm px-4 py-2 text-sm leading-6 whitespace-pre-wrap break-words'
+                    }
+                  >
+                    {item.content}
+                  </div>
+                  <span className="text-[10px] text-gray-400 dark:text-gray-600 px-1">
+                    {formatDateTime(item.createdAt)}
+                  </span>
+                </div>
+              );
+            }
+
+            const proposal = item.data.proposal!;
+            return (
+              <div key={item.id} className="flex flex-col gap-1.5">
+                {/* The request that produced the suggestion, as the human's bubble. */}
+                <div className={`flex flex-col gap-1 max-w-[85%] ${isMine(proposal.proposedByUserId) ? 'self-end items-end' : 'self-start items-start'}`}>
+                  {!isMine(proposal.proposedByUserId) && (
+                    <span className="text-[11px] font-medium text-gray-500 dark:text-gray-400 px-1">
+                      {proposal.proposedByUserId}
+                    </span>
+                  )}
+                  <div
+                    className={
+                      isMine(proposal.proposedByUserId)
+                        ? 'bg-blue-600 text-white rounded-2xl rounded-tr-sm px-4 py-2 text-sm leading-6 whitespace-pre-wrap break-words'
+                        : 'bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-gray-100 rounded-2xl rounded-tl-sm px-4 py-2 text-sm leading-6 whitespace-pre-wrap break-words'
+                    }
+                  >
+                    {proposal.suggestedPrompt}
+                  </div>
+                </div>
+                <AgentBubble
+                  proposal={proposal}
+                  canReview={canReview}
+                  canEdit={!!userId && proposal.proposedByUserId === userId}
+                  actionId={actionId}
+                  onReview={onReview}
+                  onEdit={onEdit}
+                  onWithdraw={onWithdraw}
+                />
+              </div>
+            );
+          })}
+
+          {turns.map((turn, i) => (
+            <div key={`prompt-${i}`} className="self-end max-w-[85%] flex flex-col items-end gap-1">
+              <div className="bg-blue-600 text-white rounded-2xl rounded-tr-sm px-4 py-2 text-sm leading-6 whitespace-pre-wrap break-words">
+                {turn.prompt}
+              </div>
+            </div>
+          ))}
+          {turns.map((turn, i) => (
+            <DraftBubble
+              key={i}
+              turn={turn}
+              index={i}
+              canApplyDirectly={canApplyDirectly}
+              sending={sendingTurn === i}
+              onSelect={(optionIndex) =>
+                setTurns((prev) => prev.map((t, ti) => (ti === i ? { ...t, selected: optionIndex } : t)))
+              }
+              onSend={() => sendTurn(i)}
+              onDiscard={() => setTurns((prev) => prev.filter((_, ti) => ti !== i))}
             />
           ))}
+
+          {thinking && <TypingBubble />}
+          <div ref={endRef} />
         </div>
 
-        <div className="pt-2 border-t border-gray-100 dark:border-gray-700/50">
+        <div className="flex-shrink-0 pt-2 border-t border-gray-100 dark:border-gray-700/50">
+          <div className="flex items-center gap-1 pb-1">
+            {([
+              { key: 'chat', label: 'Chat', icon: MessageSquare },
+              { key: 'propose', label: 'Propose change', icon: Sparkles },
+            ] as const).map(({ key, label, icon: Icon }) => (
+              <button
+                key={key}
+                onClick={() => setTab(key)}
+                aria-selected={tab === key}
+                role="tab"
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-[13px] transition-colors border-b-2 -mb-px ${
+                  tab === key
+                    ? 'border-blue-500 text-blue-600 dark:text-blue-400 font-medium'
+                    : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
+                }`}
+              >
+                <Icon size={13} />
+                {label}
+              </button>
+            ))}
+          </div>
+
           <div className="flex items-end gap-2">
             <AutoGrowTextarea
               value={input}

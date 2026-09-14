@@ -158,6 +158,12 @@ export interface StopFeedback {
 export interface DayComment {
   id: string;
   author: string;
+  /**
+   * Who wrote it. Comments used to store the literal "You", which made every
+   * collaborator's comment look like your own — and a chat feed needs to know
+   * whose bubble to align right. Absent on comments written before this.
+   */
+  authorId?: string;
   text: string;
   createdAt: string;
 }
