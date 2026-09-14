@@ -9,6 +9,7 @@ import { useUser, SignInButtonWrapper, UserButtonWrapper } from '@/components/Au
 import { getAirlineBookingUrl } from '@/lib/airline-booking';
 import useSWR, { mutate } from 'swr';
 import type { ChatMessageUI, ChatPayload, SavedTrip, RouteLink } from '@/lib/chat-state';
+import { mergeServerTrips } from '@/lib/saved-trips-merge';
 import OneStopPanel from './OneStopPanel';
 import TravelerProfileModal from './TravelerProfileModal';
 import ThemeToggle from '@/components/ThemeToggle';
@@ -687,31 +688,37 @@ export default function ChatPage() {
     }
   }, [savedTrips, isLoaded, isSignedIn]);
 
-  // Refresh server-owned trip data whenever One Stop opens so cron weather and
-  // itinerary changes accepted by another collaborator appear without a page
-  // reload. Only weather fields and the payload (itinerary, maps, packing) are
-  // merged, so unsynced local edits (todos, notes, feedback) are never clobbered.
+  // Refresh the trip list whenever One Stop opens, so cron weather, itinerary
+  // changes accepted by another collaborator, AND trips shared with you since the
+  // page loaded all appear without a full reload. The server decides membership
+  // and order; local state keeps its unsynced edits (todos, notes, comments).
   useEffect(() => {
     if (!isLoaded || !isSignedIn || !oneStopOpen) return;
     let cancelled = false;
-    fetch('/api/saved-trips')
-      .then((r) => r.json())
-      .then((data: { trips?: SavedTrip[] }) => {
-        if (cancelled || !data.trips) return;
-        setSavedTrips((prev) => prev.map((trip) => {
-          const fresh = data.trips!.find((t) => t.id === trip.id);
-          if (!fresh) return trip;
-          return {
-            ...trip,
-            weatherAlert: fresh.weatherAlert,
-            weatherSnapshot: fresh.weatherSnapshot,
-            weatherUpdatedAt: fresh.weatherUpdatedAt,
-            payload: fresh.payload,
-          };
-        }));
-      })
-      .catch(() => { /* keep the data we already have */ });
-    return () => { cancelled = true; };
+
+    const refresh = () => {
+      fetch('/api/saved-trips')
+        .then((r) => r.json())
+        .then((data: { trips?: SavedTrip[] }) => {
+          if (cancelled || !data.trips) return;
+          setSavedTrips((prev) => mergeServerTrips(prev, data.trips!));
+        })
+        .catch(() => { /* keep the data we already have */ });
+    };
+
+    refresh();
+
+    // Also re-check when the tab regains focus. Accepting an invitation usually
+    // happens in another tab, and without this the panel — which is already open
+    // — would never notice the trip it was just added to.
+    const onVisible = () => { if (!document.hidden) refresh(); };
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [isLoaded, isSignedIn, oneStopOpen]);
 
   const saveTrip = async (payload: ChatPayload, conversationId: string) => {

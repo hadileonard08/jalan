@@ -101,11 +101,14 @@ export default function InvitePage() {
                 <div className="flex items-center gap-2 text-sm text-green-700 dark:text-green-300 bg-green-50 dark:bg-green-900/20 rounded-lg px-3 py-2">
                   <Check size={16} /> You&apos;re on this trip.
                 </div>
+                <p className="text-[12px] text-gray-500 dark:text-gray-400">
+                  The trip is now in your One Stop panel — open Jalan and pick it from the trip list.
+                </p>
                 <button
                   onClick={() => router.push('/')}
                   className="w-full bg-blue-600 text-white text-sm font-medium px-4 py-2 rounded-lg hover:bg-blue-700"
                 >
-                  Open One Stop
+                  Go to Jalan
                 </button>
               </div>
             ) : !isSignedIn ? (
