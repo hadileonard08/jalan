@@ -115,6 +115,9 @@ function AutoGrowTextarea({
     // Reset first, otherwise the box can only ever grow.
     el.style.height = 'auto';
     el.style.height = `${el.scrollHeight}px`;
+    // Only show a scrollbar once the box is capped by max-height. Leaving it on
+    // `auto` draws a track even when everything fits.
+    el.style.overflowY = el.scrollHeight > el.clientHeight ? 'auto' : 'hidden';
   }, [value]);
 
   return (
@@ -133,7 +136,7 @@ function AutoGrowTextarea({
       }}
       placeholder={placeholder}
       disabled={disabled}
-      className="flex-1 min-w-0 text-[15px] leading-6 border border-gray-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-400 disabled:opacity-60 resize-none max-h-40 overflow-y-auto"
+      className="flex-1 min-w-0 text-[15px] leading-6 border border-gray-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-400 disabled:opacity-60 resize-none max-h-40 overflow-hidden"
     />
   );
 }
@@ -1538,7 +1541,7 @@ function DayProposalBox({
               value={input}
               onChange={setInput}
               onSubmit={submit}
-              placeholder={`Change something on Day ${day}...`}
+              placeholder="Change something..."
               disabled={submitting || previewing}
               ariaLabel={`Suggest a change for Day ${day}`}
             />
