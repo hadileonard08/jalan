@@ -1,6 +1,6 @@
 import { db } from '../db';
 import { savedTrips, tripProposals } from '../db/schema';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 
 // Concurrency guards for the review path.
 //
@@ -8,37 +8,49 @@ import { and, eq, sql } from 'drizzle-orm';
 // `status === 'pending'` check and both write the payload — the same suggestion
 // gets applied twice, and one reviewer's itinerary change is silently lost.
 
+type ProposalStatus = 'pending' | 'accepted' | 'rejected';
+
 /**
- * Atomically moves a proposal out of `pending`.
+ * Atomically moves a proposal to a new status.
  *
- * The status transition is the lock: Postgres serialises the two UPDATEs, so
- * exactly one of them matches `status = 'pending'`. Returns the updated row, or
- * null when another reviewer got there first.
+ * The status transition is the lock: Postgres serialises the UPDATEs, so exactly
+ * one caller matches the expected `from` status. Returns the updated row, or null
+ * when someone else got there first.
+ *
+ * `from` includes 'rejected' when the Master Planner changes their mind and
+ * accepts something they previously turned down.
  */
 export async function claimProposal(
   tripId: string,
   proposalId: string,
   status: 'accepted' | 'rejected',
+  from: ProposalStatus[] = ['pending'],
 ) {
   const [row] = await db
     .update(tripProposals)
-    .set({ status })
+    .set({ status, reviewedAt: new Date() })
     .where(
       and(
         eq(tripProposals.id, proposalId),
         eq(tripProposals.tripId, tripId),
-        eq(tripProposals.status, 'pending'),
+        inArray(tripProposals.status, from),
       ),
     )
     .returning();
   return row || null;
 }
 
-/** Puts a proposal back when the itinerary write lost a race. */
-export async function releaseProposal(proposalId: string) {
+/**
+ * Puts a proposal back when the itinerary write lost a race, restoring whatever
+ * it was before the claim (pending, or rejected if it was being re-accepted).
+ */
+export async function releaseProposal(
+  proposalId: string,
+  status: Exclude<ProposalStatus, 'accepted'> = 'pending',
+) {
   await db
     .update(tripProposals)
-    .set({ status: 'pending' })
+    .set({ status, reviewedAt: null })
     .where(and(eq(tripProposals.id, proposalId), eq(tripProposals.status, 'accepted')));
 }
 

@@ -18,6 +18,7 @@ function serializeProposal(row: typeof tripProposals.$inferSelect) {
     suggestedPrompt: row.suggestedPrompt,
     patchData: row.patchData,
     createdAt: row.createdAt.toISOString(),
+    reviewedAt: row.reviewedAt ? row.reviewedAt.toISOString() : null,
   };
 }
 

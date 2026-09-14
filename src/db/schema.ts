@@ -201,6 +201,9 @@ export const tripProposals = pgTable('trip_proposals', {
   suggestedPrompt: text('suggested_prompt').notNull(),
   patchData: jsonb('patch_data').notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
+  // When the Master Planner decided. Null while still pending, and reset if they
+  // change their mind, so the UI can say when a decision was made.
+  reviewedAt: timestamp('reviewed_at'),
 }, (table) => ({
   tripIdx: index('trip_proposals_trip_id_idx').on(table.tripId),
   statusIdx: index('trip_proposals_status_idx').on(table.status),

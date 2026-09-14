@@ -71,6 +71,27 @@ async function main() {
   await releaseProposal(proposal.id);
   const released = await db.select().from(tripProposals).where(eq(tripProposals.id, proposal.id)).limit(1);
   check('goes back to pending', released[0].status, 'pending');
+  check('and the decision timestamp is cleared', released[0].reviewedAt, null);
+
+  console.log('\nChanging your mind — accepting something previously rejected:');
+  await claimProposal(trip.id, proposal.id, 'rejected', ['pending']);
+  const rejectedRow = await db.select().from(tripProposals).where(eq(tripProposals.id, proposal.id)).limit(1);
+  check('the suggestion is rejected', rejectedRow[0].status, 'rejected');
+  check('with a decision timestamp', rejectedRow[0].reviewedAt !== null, true);
+
+  // A plain claim must not resurrect a decision someone already made.
+  const blocked = await claimProposal(trip.id, proposal.id, 'accepted', ['pending']);
+  check('a pending-only claim cannot re-accept it', blocked, null);
+
+  const reAccepted = await claimProposal(trip.id, proposal.id, 'accepted', ['pending', 'rejected']);
+  check('an explicit re-accept succeeds', reAccepted?.status, 'accepted');
+  const afterReAccept = await db.select().from(tripProposals).where(eq(tripProposals.id, proposal.id)).limit(1);
+  check('status is now accepted', afterReAccept[0].status, 'accepted');
+
+  console.log('\nA re-accept that loses the itinerary race goes back to rejected:');
+  await releaseProposal(proposal.id, 'rejected');
+  const restored = await db.select().from(tripProposals).where(eq(tripProposals.id, proposal.id)).limit(1);
+  check('restored to rejected, not pending', restored[0].status, 'rejected');
 
   console.log('\nTwo reviewers commit different itineraries at once:');
   const [fresh] = await db.select().from(savedTrips).where(eq(savedTrips.id, trip.id)).limit(1);

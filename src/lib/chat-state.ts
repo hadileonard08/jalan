@@ -257,4 +257,6 @@ export interface TripProposal {
   suggestedPrompt: string;
   patchData: ItineraryPatch;
   createdAt: string;
+  // When the Master Planner decided; null while pending.
+  reviewedAt?: string | null;
 }

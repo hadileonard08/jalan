@@ -21,12 +21,13 @@ function serializeProposal(row: typeof tripProposals.$inferSelect) {
     suggestedPrompt: row.suggestedPrompt,
     patchData: row.patchData,
     createdAt: row.createdAt.toISOString(),
+    reviewedAt: row.reviewedAt ? row.reviewedAt.toISOString() : null,
   };
 }
 
 // Loads the proposal plus the caller's access, enforcing that pending-only
 // actions really are pending.
-async function loadPendingProposal(tripId: string, proposalId: string) {
+async function loadProposal(tripId: string, proposalId: string) {
   const [proposal] = await db
     .select()
     .from(tripProposals)
@@ -64,18 +65,22 @@ export async function PATCH(
       return NextResponse.json({ error: 'Only the Master Planner can review proposals' }, { status: 403 });
     }
 
-    const proposal = await loadPendingProposal(tripId, proposalId);
+    const proposal = await loadProposal(tripId, proposalId);
     if (!proposal) {
       return NextResponse.json({ error: 'Proposal not found' }, { status: 404 });
     }
 
-    if (proposal.status !== 'pending') {
-      return NextResponse.json({ error: `Proposal already ${proposal.status}` }, { status: 409 });
-    }
-
     if (action === 'reject') {
+      if (proposal.status === 'accepted') {
+        // The change is already merged into the itinerary — there is no inverse
+        // patch, so rejecting can't undo it. Say so rather than flipping a label.
+        return NextResponse.json(
+          { error: 'This change is already applied to the itinerary. Suggest a new change to alter it.' },
+          { status: 409 },
+        );
+      }
       // Atomic claim: if another reviewer already decided, this matches no row.
-      const rejected = await claimProposal(tripId, proposalId, 'rejected');
+      const rejected = await claimProposal(tripId, proposalId, 'rejected', ['pending']);
       if (!rejected) {
         return NextResponse.json(
           { error: 'Another reviewer already handled this suggestion.' },
@@ -84,6 +89,12 @@ export async function PATCH(
       }
       return NextResponse.json({ proposal: serializeProposal(rejected) });
     }
+
+    if (proposal.status === 'accepted') {
+      return NextResponse.json({ error: 'Proposal already accepted' }, { status: 409 });
+    }
+    // Accepting a previously rejected suggestion is allowed — the Master Planner
+    // may have changed their mind. Anything else has already been applied. 
 
     // Accept: merge patch into the saved itinerary.
     const payload = JSON.parse(trip.payload || '{}');
@@ -106,7 +117,7 @@ export async function PATCH(
     // Claim the suggestion BEFORE the expensive work, so two concurrent accepts
     // cannot both run enrichment for the same patch. The status transition is
     // the lock — only one caller can move it out of `pending`.
-    const claimed = await claimProposal(tripId, proposalId, 'accepted');
+    const claimed = await claimProposal(tripId, proposalId, 'accepted', ['pending', 'rejected']);
     if (!claimed) {
       return NextResponse.json(
         { error: 'Another reviewer already handled this suggestion.' },
@@ -136,7 +147,8 @@ export async function PATCH(
     // drop their change, so hand the suggestion back and ask for a retry.
     const updatedTrip = await commitPayload(tripId, trip.version, newPayload);
     if (!updatedTrip) {
-      await releaseProposal(proposalId);
+      // Restore whatever it was before the claim.
+      await releaseProposal(proposalId, proposal.status === 'rejected' ? 'rejected' : 'pending');
       return NextResponse.json(
         { error: 'The trip changed while this suggestion was being applied. Please review it again.' },
         { status: 409 },
@@ -182,7 +194,7 @@ export async function PUT(
       return NextResponse.json({ error: 'Not authorized' }, { status: 403 });
     }
 
-    const proposal = await loadPendingProposal(tripId, proposalId);
+    const proposal = await loadProposal(tripId, proposalId);
     if (!proposal) {
       return NextResponse.json({ error: 'Proposal not found' }, { status: 404 });
     }
@@ -243,7 +255,7 @@ export async function DELETE(
       return NextResponse.json({ error: 'Not authorized' }, { status: 403 });
     }
 
-    const proposal = await loadPendingProposal(tripId, proposalId);
+    const proposal = await loadProposal(tripId, proposalId);
     if (!proposal) {
       return NextResponse.json({ error: 'Proposal not found' }, { status: 404 });
     }

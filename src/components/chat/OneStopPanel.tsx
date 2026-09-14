@@ -1354,9 +1354,28 @@ function ProposalCard({
           </button>
         </div>
       ) : (
-        <span className={`text-[11px] inline-flex items-center px-2 py-0.5 rounded-full ${PROPOSAL_STATUS_STYLES[proposal.status]}`}>
-          {proposal.status}
-        </span>
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className={`text-[11px] inline-flex items-center px-2 py-0.5 rounded-full ${PROPOSAL_STATUS_STYLES[proposal.status]}`}>
+            {proposal.status}
+          </span>
+          {proposal.reviewedAt && (
+            <span className="text-[11px] text-gray-400 dark:text-gray-500">
+              {formatDateTime(proposal.reviewedAt)}
+            </span>
+          )}
+          {/* Changing your mind: a rejection can be reversed, since the itinerary
+              was never touched. An acceptance can't — the change is already in. */}
+          {canReview && proposal.status === 'rejected' && (
+            <button
+              onClick={() => onReview(proposal.id, 'accept')}
+              disabled={actionId === proposal.id}
+              className="text-[12px] font-medium text-blue-600 dark:text-blue-400 hover:underline disabled:opacity-50"
+              title="Apply this change to the itinerary"
+            >
+              {actionId === proposal.id ? 'Applying…' : 'Accept anyway'}
+            </button>
+          )}
+        </div>
       )}
 
       {canEdit && pending && !editing && (
@@ -2066,11 +2085,13 @@ function SavedTripCard({ trip, onUpdate, onDelete, onLeave, onPayloadRefresh, is
         setProposalActionId(null);
         return;
       }
+      if (action === 'accept' && data.trip) {
+        // Accepting a previously rejected suggestion applies it now, so refresh
+        // the itinerary from the response rather than waiting for the next poll.
+        onPayloadRefresh(trip.id, data.trip.payload);
+      }
       if (data.proposal) {
         setProposals((prev) => prev.map((p) => (p.id === proposalId ? data.proposal : p)));
-      }
-      if (action === 'accept' && data.trip) {
-        onUpdate({ ...trip, payload: data.trip.payload });
       }
     } catch { /* ignore */ }
     setProposalActionId(null);
