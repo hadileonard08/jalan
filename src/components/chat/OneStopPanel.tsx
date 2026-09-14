@@ -1224,7 +1224,7 @@ interface PatchPreview {
   dayIndex: number | null;
   patch: ItineraryPatch;
   wouldChange: boolean;
-  warning?: string | null;
+  findings?: { feedback: string[]; advisory: string[] };
 }
 
 const ROLE_LABELS: Record<TripRole, string> = {
@@ -1495,9 +1495,22 @@ function DayProposalBox({
               able to apply it. Naming the day or the exact stop usually helps.
             </div>
           )}
-          {preview.warning && (
-            <div className="text-[11px] text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 rounded-lg px-2 py-1.5">
-              {preview.warning}
+          {/* Same deterministic checks the generation pipeline runs. `feedback`
+              is what would make the pipeline regenerate; `advisory` is a hint. */}
+          {!!preview.findings?.feedback.length && (
+            <div className="text-[11px] text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-900/20 rounded-lg px-2 py-1.5 space-y-1">
+              <div className="font-semibold">This would be flagged by the itinerary checks:</div>
+              {preview.findings.feedback.map((f, i) => (
+                <div key={i}>• {f}</div>
+              ))}
+            </div>
+          )}
+          {!!preview.findings?.advisory.length && (
+            <div className="text-[11px] text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 rounded-lg px-2 py-1.5 space-y-1">
+              <div className="font-semibold">Worth a look:</div>
+              {preview.findings.advisory.map((f, i) => (
+                <div key={i}>• {f}</div>
+              ))}
             </div>
           )}
           <div className="flex items-center gap-2">

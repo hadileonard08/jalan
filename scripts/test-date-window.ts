@@ -11,11 +11,8 @@
  *   npx tsx scripts/test-date-window.ts
  */
 
-import {
-  resolveSeasonalStartDate,
-  hasStatedDateWindow,
-  findItineraryDateMismatch,
-} from '../src/agents/conversation-graph';
+import { resolveSeasonalStartDate, hasStatedDateWindow } from '../src/agents/conversation-graph';
+import { findItineraryDateMismatch } from '../src/agents/itinerary-checks';
 
 let failures = 0;
 function check(label: string, actual: unknown, expected: unknown) {

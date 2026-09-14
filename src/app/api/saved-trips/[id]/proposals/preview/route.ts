@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@clerk/nextjs/server';
 import { generateItineraryPatch, mergeItineraryPatch } from '../../../../../../agents/refine-itinerary';
 import { getTripAccess } from '../../../../../../lib/trip-access';
-import { eveningFeasibilityWarning } from '../../../../../../lib/itinerary-feasibility';
+import { affectedDaysFromPatch } from '../../../../../../lib/refresh-enrichment';
+import { runItineraryChecks, type ItineraryCheckResult } from '../../../../../../agents/itinerary-checks';
 
 export const dynamic = 'force-dynamic';
 
@@ -43,12 +44,54 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const merged = mergeItineraryPatch(itinerary, patch);
     const wouldChange = merged !== itinerary;
 
-    // Warn when the change lands a venue that closes in the late afternoon in the
-    // Evening block — the suggester can fix it before it reaches the reviewer.
-    const warning = wouldChange ? eveningFeasibilityWarning(merged) : null;
+    // Run the same deterministic checks the generation graph uses, so a
+    // suggestion can't smuggle in a hallucinated venue, a wrong day count, a
+    // past date, or a date mismatch that nothing else would catch.
+    let findings: ItineraryCheckResult = { feedback: [], advisory: [] };
+    if (wouldChange) {
+      const entities = (payload.entities || {}) as {
+        destination?: string;
+        startDate?: string;
+        endDate?: string;
+        durationDays?: number;
+      };
+      const touchedDays = affectedDaysFromPatch(patch).map((d) => d.dayNumber);
+
+      // Only verify the landmarks this suggestion actually touched.
+      const scopeOf = (text: string) =>
+        touchedDays.length
+          ? text
+              .split(/(?=#+\s+Day\s+\d+)/i)
+              .filter((block) => {
+                const m = block.match(/#+\s+Day\s+(\d+)/i);
+                return m ? touchedDays.includes(Number(m[1])) : false;
+              })
+              .join('')
+          : undefined;
+
+      const base = {
+        destination: trip.destination || entities.destination,
+        startDate: entities.startDate,
+        endDate: entities.endDate,
+        durationDays: entities.durationDays,
+      };
+
+      // Check the itinerary before and after, then report only what this
+      // suggestion *introduces*. Without the diff, a pre-existing problem on an
+      // untouched day (Bali's Day 6 has no time blocks) would be pinned on it.
+      const [before, after] = await Promise.all([
+        runItineraryChecks({ itinerary, ...base, landmarkScope: scopeOf(itinerary) }),
+        runItineraryChecks({ itinerary: merged, ...base, landmarkScope: scopeOf(merged) }),
+      ]);
+
+      findings = {
+        feedback: after.feedback.filter((f) => !before.feedback.includes(f)),
+        advisory: after.advisory.filter((f) => !before.advisory.includes(f)),
+      };
+    }
 
     return NextResponse.json({
-      preview: { prompt: prompt.trim(), dayIndex: day, patch, wouldChange, warning },
+      preview: { prompt: prompt.trim(), dayIndex: day, patch, wouldChange, findings },
     });
   } catch (error) {
     console.error('Proposal preview error:', error);

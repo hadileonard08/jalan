@@ -3,7 +3,13 @@ import { getChatModel, getQualityModel } from '../lib/ai-provider';
 import { getWeatherForecast } from './weather';
 import { searchDestinationNews } from './news-search';
 import { getDestinationImageUrl, hydrateItineraryImages } from './destination-images';
-import { verifyItineraryLandmarks, buildRouteLinks } from './itinerary-guardrails';
+import { buildRouteLinks } from './itinerary-guardrails';
+import {
+  runItineraryChecks,
+  getExpectedTripDays,
+  findPastCalendarDates,
+  findItineraryDateMismatch,
+} from './itinerary-checks';
 import { buildTransportPlan, injectTransportNotes } from './transport';
 import { applyRefinements, extractExistingItinerary } from './refine-itinerary';
 import { getCheckpointer } from './checkpointer';
@@ -485,100 +491,6 @@ export function getTravelDateValidationError(
     return 'The return date must be on or after the departure date. Please provide a valid future date range.';
   }
   return '';
-}
-
-export function getExpectedTripDays(
-  startDate: string | undefined,
-  endDate: string | undefined,
-  durationDays: number | undefined,
-): number | undefined {
-  if (startDate && endDate) {
-    const start = new Date(`${startDate}T00:00:00Z`);
-    const end = new Date(`${endDate}T00:00:00Z`);
-    if (!Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime()) && end >= start) {
-      return Math.round((end.getTime() - start.getTime()) / (24 * 60 * 60 * 1000)) + 1;
-    }
-  }
-  return durationDays && durationDays > 0 ? durationDays : undefined;
-}
-
-const MONTH_NAMES = [
-  'january', 'february', 'march', 'april', 'may', 'june',
-  'july', 'august', 'september', 'october', 'november', 'december',
-];
-
-// Months a trip spans, as "YYYY-MM" keys.
-function tripMonthKeys(startDate?: string, endDate?: string): Set<string> {
-  const keys = new Set<string>();
-  if (!startDate) return keys;
-  const start = new Date(`${startDate}T00:00:00Z`);
-  if (Number.isNaN(start.getTime())) return keys;
-  const end = new Date(`${endDate || startDate}T00:00:00Z`);
-
-  const cursor = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), 1));
-  const last = Number.isNaN(end.getTime())
-    ? cursor
-    : new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), 1));
-  while (cursor <= last) {
-    keys.add(`${cursor.getUTCFullYear()}-${String(cursor.getUTCMonth() + 1).padStart(2, '0')}`);
-    cursor.setUTCMonth(cursor.getUTCMonth() + 1);
-  }
-  return keys;
-}
-
-// Compares the dates printed in the itinerary's day headings against the dates the
-// user actually asked for. Deterministic on purpose: an LLM judge estimating how
-// far off a draft is gets the magnitude wrong (it once called a 4-month gap
-// "1.5 years"), so the machine states the two ranges and nothing more.
-export function findItineraryDateMismatch(
-  itinerary: string,
-  startDate?: string,
-  endDate?: string,
-): string | null {
-  const allowed = tripMonthKeys(startDate, endDate);
-  if (allowed.size === 0 || !itinerary) return null;
-
-  // Only day headings — prose mentions ("the 2027 sakura season") are not dates.
-  const headings = Array.from(itinerary.matchAll(/#{1,4}\s+Day\s+\d+[^\n]*/gi)).map((m) => m[0]);
-  const offenders: string[] = [];
-
-  const datePattern =
-    /\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2}(?:,?\s+(20\d{2}))?\b/gi;
-
-  for (const heading of headings) {
-    for (const match of heading.matchAll(datePattern)) {
-      const monthKey = String(MONTH_NAMES.indexOf(match[1].toLowerCase()) + 1).padStart(2, '0');
-      const year = match[2];
-      const ok = Array.from(allowed).some(
-        (key) => key.endsWith(`-${monthKey}`) && (!year || key.startsWith(year)),
-      );
-      if (!ok) offenders.push(match[0].trim());
-    }
-  }
-
-  if (offenders.length === 0) return null;
-  const requested = endDate && endDate !== startDate ? `${startDate} to ${endDate}` : startDate;
-  return `The itinerary's day headings are dated ${Array.from(new Set(offenders)).slice(0, 3).join(', ')}, but the user requested ${requested}. Regenerate every day for the requested dates.`;
-}
-
-export function findPastCalendarDates(text: string, referenceDate = new Date()): string[] {
-  const candidates = new Set<string>();
-  for (const match of text.matchAll(/\b\d{4}-\d{2}-\d{2}\b/g)) candidates.add(match[0]);
-  for (const match of text.matchAll(/\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}\b/gi)) {
-    candidates.add(match[0]);
-  }
-
-  const today = new Date(Date.UTC(
-    referenceDate.getUTCFullYear(),
-    referenceDate.getUTCMonth(),
-    referenceDate.getUTCDate(),
-  ));
-  return [...candidates].filter((candidate) => {
-    const parsed = /^\d{4}-/.test(candidate)
-      ? new Date(`${candidate}T00:00:00Z`)
-      : new Date(candidate);
-    return !Number.isNaN(parsed.getTime()) && parsed < today;
-  });
 }
 
 function inferDurationDays(text: string): number | undefined {
@@ -1203,60 +1115,17 @@ Output the response as markdown without a heading.`;
 
 async function guardrailsNode(state: typeof ConversationStateAnnotation.State) {
   if (!state.itinerary) return { criticFeedback: [] };
-  const feedback: string[] = [];
 
-  // Check 1: Verify landmarks exist on Wikipedia.
-  const unverified = await verifyItineraryLandmarks(state.itinerary, state.entities.destination);
-  if (unverified.length > 0) {
-    console.warn('[Guardrails] Unverified itinerary image landmarks:', unverified);
-    feedback.push(`The following places or landmarks could not be verified and may be hallucinated or closed: ${unverified.join(', ')}. Replace them with real, well-known attractions or transit options that are clearly documented.`);
-  }
-
-  // Check 2: Verify image placeholders are present for each day.
-  const dayCount = (state.itinerary.match(/#{1,4}\s+Day\s+\d+/gi) || []).length;
-  const placeholderCount = (state.itinerary.match(/!\[IMAGE:/gi) || []).length;
-  const expectedDays = getExpectedTripDays(state.entities.startDate, state.entities.endDate, state.entities.durationDays);
-  if (expectedDays && dayCount !== expectedDays) {
-    feedback.push(`The user requested ${expectedDays} travel days, but the itinerary contains ${dayCount} day headings. Regenerate it with exactly ${expectedDays} days.`);
-  }
-  if (dayCount > 0 && placeholderCount < dayCount) {
-    feedback.push(`The itinerary has ${dayCount} day(s) but only ${placeholderCount} image placeholder(s). Every day MUST have exactly one image placeholder in the format ![IMAGE: landmark name] immediately after the day heading. Add the missing placeholders.`);
-  }
-
-  const pastDates = findPastCalendarDates(state.itinerary);
-  if (pastDates.length > 0) {
-    feedback.push(`The itinerary contains past calendar dates: ${pastDates.join(', ')}. Remove past events and regenerate the plan using only current or future travel dates and events.`);
-  }
-
-  // Check 4: the itinerary is actually for the dates the user asked for. This is
-  // the deterministic counterpart to the Critic's relevance score — it reports
-  // the mismatch with exact dates instead of an estimated magnitude.
-  const dateMismatch = findItineraryDateMismatch(
-    state.itinerary,
-    state.entities.startDate,
-    state.entities.endDate,
-  );
-  if (dateMismatch) feedback.push(dateMismatch);
-
-  // Check 3: Verify each day has Morning/Afternoon/Evening time blocks.
-  // Only flag if the day has NONE of the three time slots — individual missing
-  // slots are a formatting preference, not a safety issue.
-  const dayBlocks = state.itinerary.split(/(?=#+\s+Day\s+\d+)/i).filter(Boolean);
-  const daysMissingAllTimeBlocks: string[] = [];
-  for (const block of dayBlocks) {
-    const headingMatch = block.match(/#+\s+Day\s+(\d+)/i);
-    if (!headingMatch) continue;
-    const dayNum = headingMatch[1];
-    const hasMorning = /morning/i.test(block);
-    const hasAfternoon = /afternoon/i.test(block);
-    const hasEvening = /evening/i.test(block);
-    if (!hasMorning && !hasAfternoon && !hasEvening) {
-      daysMissingAllTimeBlocks.push(`Day ${dayNum}`);
-    }
-  }
-  if (daysMissingAllTimeBlocks.length > 0) {
-    feedback.push(`The following days have no time blocks at all: ${daysMissingAllTimeBlocks.join(', ')}. Reformat each day with three sub-sections using **🌅 Morning:**, **🌞 Afternoon:**, and **🌙 Evening:** headings.`);
-  }
+  // One shared implementation, so the generation graph and the suggestion
+  // preview can never drift apart. Only `feedback` blocks; `advisory` findings
+  // are shown to a person and never trigger a regeneration.
+  const { feedback } = await runItineraryChecks({
+    itinerary: state.itinerary,
+    destination: state.entities.destination,
+    startDate: state.entities.startDate,
+    endDate: state.entities.endDate,
+    durationDays: state.entities.durationDays,
+  });
 
   return { criticFeedback: feedback };
 }

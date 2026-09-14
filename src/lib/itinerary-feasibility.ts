@@ -63,10 +63,10 @@ export function findEveningClosedVenues(itinerary: string): EveningFeasibilityIs
   return issues;
 }
 
-/** A one-line advisory for the first issue, or null when nothing looks off. */
-export function eveningFeasibilityWarning(itinerary: string): string | null {
-  const issues = findEveningClosedVenues(itinerary);
-  if (issues.length === 0) return null;
-  const first = issues[0];
-  return `${first.name} is in the Evening block on Day ${first.day}, but venues like this usually close in the late afternoon. Consider moving it to the Afternoon.`;
+/** One advisory line per issue, for the suggestion preview and the day panel. */
+export function eveningFeasibilityWarnings(itinerary: string): string[] {
+  return findEveningClosedVenues(itinerary).map(
+    (issue) =>
+      `${issue.name} (Day ${issue.day}) usually closes in the late afternoon, but it is in the Evening block.`,
+  );
 }

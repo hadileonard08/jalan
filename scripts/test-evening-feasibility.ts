@@ -9,7 +9,7 @@
  *   npx tsx scripts/test-evening-feasibility.ts
  */
 
-import { findEveningClosedVenues, eveningFeasibilityWarning } from '../src/lib/itinerary-feasibility';
+import { findEveningClosedVenues, eveningFeasibilityWarnings } from '../src/lib/itinerary-feasibility';
 
 let failures = 0;
 function check(label: string, actual: unknown, expected: unknown) {
@@ -32,8 +32,9 @@ async function main() {
   check('flags the Japanese Garden in the Evening',
     findEveningClosedVenues(reported), [{ day: 2, name: 'Seattle Japanese Garden' }]);
   check('and the warning names it',
-    eveningFeasibilityWarning(reported)?.includes('Seattle Japanese Garden'), true);
-  check('the warning names the day', eveningFeasibilityWarning(reported)?.includes('Day 2'), true);
+    eveningFeasibilityWarnings(reported)[0]?.includes('Seattle Japanese Garden'), true);
+  check('the warning names the day', eveningFeasibilityWarnings(reported)[0]?.includes('Day 2'), true);
+  check('nothing to warn about -> empty', eveningFeasibilityWarnings(day(1, 'Dinner at **The Pink Door**.')), []);
 
   console.log('\nAlso caught:');
   check('a museum', findEveningClosedVenues(day(1, 'Visit the **City Art Museum**.')).length, 1);
