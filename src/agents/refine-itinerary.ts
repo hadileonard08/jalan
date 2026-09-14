@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { getChatModel } from '../lib/ai-provider';
 import { ItineraryPatchSchema, type ItineraryPatch, type ItineraryEdit } from '../lib/chat-state';
 import type { PersistedMessage } from '../lib/chat-state';
@@ -306,16 +307,10 @@ export function extractExistingItinerary(history: PersistedMessage[]): string {
 // generateItineraryPatch — generate a JSON patch without applying it
 // ---------------------------------------------------------------------------
 
-export async function generateItineraryPatch(
-  existingItinerary: string,
-  destination: string,
-  userQuery: string
-): Promise<ItineraryPatch> {
-  if (!existingItinerary) {
-    throw new Error('No existing itinerary to refine.');
-  }
-
-  const prompt = `You are a surgical editor for travel itineraries.
+// The editor prompt, shared by the single-patch and multi-option generators so
+// the two can't drift apart.
+function buildPatchPrompt(existingItinerary: string, destination: string, userQuery: string): string {
+  return `You are a surgical editor for travel itineraries.
 
 Current itinerary for ${destination}:
 
@@ -341,13 +336,79 @@ Instructions:
 - If the user is giving a dietary or preference constraint (e.g. "I don't drink beer", "no pork", "vegetarian"), remove the offending stop and add an appropriate alternative.
 - If the user's request doesn't map to any specific edit and is more of a vague style change, return an empty edits array.
 - Match stop names using the exact bolded text in the itinerary. Substrings and common keywords are acceptable (e.g. "Oktoberfest" can match a bolded stop like "Oktoberfest at Bavarian Bierhaus" or "Bavarian Bierhaus").`;
+}
+
+export async function generateItineraryPatch(
+  existingItinerary: string,
+  destination: string,
+  userQuery: string
+): Promise<ItineraryPatch> {
+  if (!existingItinerary) {
+    throw new Error('No existing itinerary to refine.');
+  }
 
   const model = getChatModel(0.2, 'gemini-3.5-flash-lite');
   if (!model) throw new Error('AI provider not configured for refine');
 
   const structured = (model as any).withStructuredOutput(ItineraryPatchSchema);
-  const patch = await structured.invoke(prompt);
+  const patch = await structured.invoke(buildPatchPrompt(existingItinerary, destination, userQuery));
   return ItineraryPatchSchema.parse(patch);
+}
+
+const PatchOptionSchema = z.object({
+  label: z.string().describe('Short label for this option, max 8 words'),
+  patch: ItineraryPatchSchema,
+});
+
+const PatchOptionsSchema = z.object({
+  options: z.array(PatchOptionSchema).min(1).max(4),
+});
+
+export interface ItineraryPatchOption {
+  label: string;
+  patch: ItineraryPatch;
+}
+
+/**
+ * Same editor, but able to answer "give me 2 options" with several distinct
+ * candidate patches. Returns exactly one option when the request isn't asking
+ * for alternatives, so callers have a single code path.
+ */
+export async function generateItineraryPatchOptions(
+  existingItinerary: string,
+  destination: string,
+  userQuery: string,
+): Promise<ItineraryPatchOption[]> {
+  if (!existingItinerary) {
+    throw new Error('No existing itinerary to refine.');
+  }
+
+  const prompt = `${buildPatchPrompt(existingItinerary, destination, userQuery)}
+
+Returning options:
+- If the request asks for alternatives ("give me 2 options", "any other ideas", "what else", "a few choices"), return up to 4 DISTINCT options. Each must be a genuinely different choice — a different venue or a different approach — not a rewording of the same edit.
+- If the request asks for a specific number, return that many.
+- Otherwise return exactly ONE option.
+- Give every option a short label (max 8 words) naming the change, so the user can tell them apart at a glance.`;
+
+  const model = getChatModel(0.2, 'gemini-3.5-flash-lite');
+  if (!model) throw new Error('AI provider not configured for refine');
+
+  const structured = (model as any).withStructuredOutput(PatchOptionsSchema);
+  const result = await structured.invoke(prompt);
+  const parsed = PatchOptionsSchema.parse(result);
+
+  return meaningfulPatchOptions(parsed.options);
+}
+
+/**
+ * An option that edits nothing is noise — drop it, unless that's all we have
+ * (an empty patch is a legitimate "I can't map that to a stop" answer, which the
+ * preview reports as a warning rather than hiding).
+ */
+export function meaningfulPatchOptions(options: ItineraryPatchOption[]): ItineraryPatchOption[] {
+  const meaningful = options.filter((option) => option.patch.edits.length > 0);
+  return meaningful.length > 0 ? meaningful : options.slice(0, 1);
 }
 
 // ---------------------------------------------------------------------------

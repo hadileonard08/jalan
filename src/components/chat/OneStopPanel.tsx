@@ -1221,13 +1221,20 @@ function WeatherTab({ trip }: { trip: SavedTrip }) {
 // Follower. Followers suggest and comment; only the Master Planner approves.
 type TripRole = 'owner' | 'collaborator';
 
+// One candidate the AI drafted. A plain request yields a single option; asking
+// for alternatives ("give me 2 options") yields several to choose between.
+interface PatchOption {
+  label: string;
+  patch: ItineraryPatch;
+  wouldChange: boolean;
+  findings?: { feedback: string[]; advisory: string[] };
+}
+
 // A drafted-but-unsent suggestion, shown to the suggester for confirmation.
 interface PatchPreview {
   prompt: string;
   dayIndex: number | null;
-  patch: ItineraryPatch;
-  wouldChange: boolean;
-  findings?: { feedback: string[]; advisory: string[] };
+  options: PatchOption[];
 }
 
 const ROLE_LABELS: Record<TripRole, string> = {
@@ -1444,6 +1451,7 @@ function DayProposalBox({
 }) {
   const [input, setInput] = useState('');
   const [preview, setPreview] = useState<PatchPreview | null>(null);
+  const [selectedOption, setSelectedOption] = useState(0);
   const [previewing, setPreviewing] = useState(false);
   const [sending, setSending] = useState(false);
   const canReview = canReviewRole(role);
@@ -1464,13 +1472,18 @@ function DayProposalBox({
     setPreviewing(true);
     const result = await onPreview(day, input);
     setPreviewing(false);
-    if (result) setPreview(result);
+    if (result) {
+      setSelectedOption(0);
+      setPreview(result);
+    }
   };
 
+  const chosen = preview?.options[selectedOption] || preview?.options[0] || null;
+
   const confirmSend = async () => {
-    if (!preview || sending) return;
+    if (!chosen || sending) return;
     setSending(true);
-    const ok = await onSendApproved(day, preview.prompt, preview.patch);
+    const ok = await onSendApproved(day, preview!.prompt, chosen.patch);
     setSending(false);
     if (ok) {
       setPreview(null);
@@ -1486,13 +1499,43 @@ function DayProposalBox({
       {preview ? (
         <div className="rounded-xl border border-blue-200 dark:border-blue-800/50 bg-blue-50/60 dark:bg-blue-900/15 p-2.5 space-y-2">
           <div className="text-[12px] font-semibold text-gray-900 dark:text-gray-100">
-            Send this to the Master Planner?
+            {preview.options.length > 1
+              ? `Pick one to send to the Master Planner (${preview.options.length} options)`
+              : 'Send this to the Master Planner?'}
           </div>
           <div className="text-[13px] text-gray-700 dark:text-gray-300">&ldquo;{preview.prompt}&rdquo;</div>
-          <div className="text-[12px] text-gray-600 dark:text-gray-400 bg-white/70 dark:bg-gray-900/40 rounded-lg p-2">
-            <span className="font-medium text-gray-600 dark:text-gray-300">AI patch:</span> {formatPatchPreview(preview.patch)}
-          </div>
-          {!preview.wouldChange && (
+
+          {/* Several options: pick the one to suggest. */}
+          {preview.options.length > 1 ? (
+            <div className="space-y-1.5">
+              {preview.options.map((option, i) => (
+                <button
+                  key={i}
+                  onClick={() => setSelectedOption(i)}
+                  aria-pressed={selectedOption === i}
+                  className={`w-full text-left rounded-lg border p-2 transition-colors ${
+                    selectedOption === i
+                      ? 'border-blue-400 bg-white dark:bg-gray-900/60'
+                      : 'border-gray-200 dark:border-gray-700 hover:border-blue-300'
+                  }`}
+                >
+                  <div className="text-[12px] font-medium text-gray-900 dark:text-gray-100">
+                    {option.label || `Option ${i + 1}`}
+                  </div>
+                  <div className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">
+                    {formatPatchPreview(option.patch)}
+                  </div>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="text-[12px] text-gray-600 dark:text-gray-400 bg-white/70 dark:bg-gray-900/40 rounded-lg p-2">
+              <span className="font-medium text-gray-600 dark:text-gray-300">AI patch:</span>{' '}
+              {chosen ? formatPatchPreview(chosen.patch) : '—'}
+            </div>
+          )}
+
+          {chosen && !chosen.wouldChange && (
             <div className="text-[11px] text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 rounded-lg px-2 py-1.5">
               This doesn&apos;t match anything in the itinerary yet, so the Master Planner may not be
               able to apply it. Naming the day or the exact stop usually helps.
@@ -1500,18 +1543,18 @@ function DayProposalBox({
           )}
           {/* Same deterministic checks the generation pipeline runs. `feedback`
               is what would make the pipeline regenerate; `advisory` is a hint. */}
-          {!!preview.findings?.feedback.length && (
+          {!!chosen?.findings?.feedback.length && (
             <div className="text-[11px] text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-900/20 rounded-lg px-2 py-1.5 space-y-1">
               <div className="font-semibold">This would be flagged by the itinerary checks:</div>
-              {preview.findings.feedback.map((f, i) => (
+              {chosen.findings.feedback.map((f, i) => (
                 <div key={i}>• {f}</div>
               ))}
             </div>
           )}
-          {!!preview.findings?.advisory.length && (
+          {!!chosen?.findings?.advisory.length && (
             <div className="text-[11px] text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 rounded-lg px-2 py-1.5 space-y-1">
               <div className="font-semibold">Worth a look:</div>
-              {preview.findings.advisory.map((f, i) => (
+              {chosen.findings.advisory.map((f, i) => (
                 <div key={i}>• {f}</div>
               ))}
             </div>
@@ -1556,8 +1599,8 @@ function DayProposalBox({
           </div>
           <div className="text-[11px] text-gray-400 dark:text-gray-500">
             {role === 'collaborator'
-              ? 'You’ll see the AI’s change before it’s sent to the Master Planner.'
-              : 'Enter to send · Shift+Enter for a new line.'}
+              ? 'You’ll see the AI’s change first — ask for options to compare alternatives.'
+              : 'Enter to send · Shift+Enter for a new line · ask for options to compare.'}
           </div>
         </>
       )}

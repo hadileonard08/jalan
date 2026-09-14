@@ -12,7 +12,7 @@
  *   npx tsx scripts/test-proposal-preview.ts
  */
 
-import { mergeItineraryPatch } from '../src/agents/refine-itinerary';
+import { mergeItineraryPatch, meaningfulPatchOptions } from '../src/agents/refine-itinerary';
 import { ItineraryPatchSchema, type ItineraryPatch } from '../src/lib/chat-state';
 
 let failures = 0;
@@ -78,6 +78,20 @@ check('an unknown action is rejected', ItineraryPatchSchema.safeParse({ edits: [
 check('day 0 is rejected', ItineraryPatchSchema.safeParse({ edits: [{ dayNumber: 0, action: 'add_stop' }] }).success, false);
 check('a non-object is rejected', ItineraryPatchSchema.safeParse('nope').success, false);
 check('null is rejected', ItineraryPatchSchema.safeParse(null).success, false);
+
+console.log('\nOptions ("give me 2 options") — which ones the suggester sees:');
+const option = (label: string, patch: ItineraryPatch) => ({ label, patch });
+const twoOptions = [
+  option('Swap for the aquarium', replaceStop),
+  option('Swap for the ferry', dayTwoEdit),
+];
+check('several options all survive', meaningfulPatchOptions(twoOptions).length, 2);
+check('labels are preserved', meaningfulPatchOptions(twoOptions).map((o) => o.label),
+  ['Swap for the aquarium', 'Swap for the ferry']);
+check('an option that edits nothing is dropped',
+  meaningfulPatchOptions([...twoOptions, option('Do nothing', { edits: [] })]).length, 2);
+check('an all-empty set falls back to one (so the "no match" warning still shows)',
+  meaningfulPatchOptions([option('Do nothing', { edits: [] })]).length, 1);
 
 console.log('\n═══════════════════════════════════════════════════════════');
 console.log(failures === 0 ? '  RESULT: ✅ ALL TESTS PASSED' : `  RESULT: ❌ ${failures} FAILED`);
