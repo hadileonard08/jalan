@@ -3,6 +3,7 @@ import { auth } from '@clerk/nextjs/server';
 import { db } from '../../../../../db';
 import { savedTrips, tripCollaborators, tripProposals } from '../../../../../db/schema';
 import { generateItineraryPatch } from '../../../../../agents/refine-itinerary';
+import { ItineraryPatchSchema, type ItineraryPatch } from '../../../../../lib/chat-state';
 import { getTripAccess } from '../../../../../lib/trip-access';
 import { eq, and, asc } from 'drizzle-orm';
 
@@ -63,7 +64,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
     const tripId = params.id;
     const body = await req.json().catch(() => ({}));
-    const { prompt, dayIndex } = body;
+    const { prompt, dayIndex, patch: approvedPatch } = body;
     if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
       return NextResponse.json({ error: 'prompt is required' }, { status: 400 });
     }
@@ -87,11 +88,23 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       return NextResponse.json({ error: 'Trip has no itinerary to refine' }, { status: 400 });
     }
 
-    const patch = await generateItineraryPatch(
-      existingItinerary,
-      trip.destination || 'the destination',
-      day ? `Day ${day}: ${prompt.trim()}` : prompt.trim(),
-    );
+    // A suggester who reviewed a preview sends that exact patch back, so what the
+    // Master Planner sees is what was approved — not a fresh, different result.
+    // Validated here rather than trusted, since it arrives from the client.
+    let patch: ItineraryPatch;
+    if (approvedPatch) {
+      const parsed = ItineraryPatchSchema.safeParse(approvedPatch);
+      if (!parsed.success) {
+        return NextResponse.json({ error: 'Invalid patch' }, { status: 400 });
+      }
+      patch = parsed.data;
+    } else {
+      patch = await generateItineraryPatch(
+        existingItinerary,
+        trip.destination || 'the destination',
+        day ? `Day ${day}: ${prompt.trim()}` : prompt.trim(),
+      );
+    }
 
     const [proposal] = await db
       .insert(tripProposals)

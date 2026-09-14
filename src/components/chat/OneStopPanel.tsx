@@ -13,6 +13,7 @@ import { useUser } from '@/components/AuthProvider';
 import type {
   SavedTrip, ChatPayload, StopFeedback, StopComment, DayFeedback, DayComment,
   ManualFlightEntry, UploadedDocument, WeatherSnapshot, TripProposal, NoteEntry, RouteLink,
+  ItineraryPatch,
 } from '@/lib/chat-state';
 import { stripFollowUpQuestions } from '@/lib/itinerary-cleanup';
 import type { DayTransport } from '@/agents/transport';
@@ -414,6 +415,8 @@ function DayPanel({
   proposals,
   submittingDay,
   onSubmitProposal,
+  onPreviewProposal,
+  onSendApprovedProposal,
   onReviewProposal,
   onEditProposal,
   onWithdrawProposal,
@@ -426,7 +429,9 @@ function DayPanel({
   proposalRole: TripRole | null;
   proposals: TripProposal[];
   submittingDay: number | null;
-  onSubmitProposal: (day: number, prompt: string) => Promise<boolean>;
+  onSubmitProposal: (day: number, prompt: string, patch?: ItineraryPatch) => Promise<boolean>;
+  onPreviewProposal: (day: number, prompt: string) => Promise<PatchPreview | null>;
+  onSendApprovedProposal: (day: number, prompt: string, patch: ItineraryPatch) => Promise<boolean>;
   onReviewProposal: (proposalId: string, action: 'accept' | 'reject') => void;
   onEditProposal: (proposalId: string, prompt: string) => Promise<boolean>;
   onWithdrawProposal: (proposalId: string) => void;
@@ -477,6 +482,8 @@ function DayPanel({
           proposals={proposals}
           submitting={submittingDay === day}
           onSubmit={onSubmitProposal}
+          onPreview={onPreviewProposal}
+          onSendApproved={onSendApprovedProposal}
           onReview={onReviewProposal}
           onEdit={onEditProposal}
           onWithdraw={onWithdrawProposal}
@@ -497,6 +504,8 @@ function ItineraryTab({
   proposals,
   submittingDay,
   onSubmitProposal,
+  onPreviewProposal,
+  onSendApprovedProposal,
   onReviewProposal,
   onEditProposal,
   onWithdrawProposal,
@@ -508,7 +517,9 @@ function ItineraryTab({
   proposalRole: TripRole | null;
   proposals: TripProposal[];
   submittingDay: number | null;
-  onSubmitProposal: (day: number, prompt: string) => Promise<boolean>;
+  onSubmitProposal: (day: number, prompt: string, patch?: ItineraryPatch) => Promise<boolean>;
+  onPreviewProposal: (day: number, prompt: string) => Promise<PatchPreview | null>;
+  onSendApprovedProposal: (day: number, prompt: string, patch: ItineraryPatch) => Promise<boolean>;
   onReviewProposal: (proposalId: string, action: 'accept' | 'reject') => void;
   onEditProposal: (proposalId: string, prompt: string) => Promise<boolean>;
   onWithdrawProposal: (proposalId: string) => void;
@@ -566,6 +577,8 @@ function ItineraryTab({
               proposals={proposals.filter((proposal) => proposalDays(proposal).includes(day))}
               submittingDay={submittingDay}
               onSubmitProposal={onSubmitProposal}
+              onPreviewProposal={onPreviewProposal}
+              onSendApprovedProposal={onSendApprovedProposal}
               onReviewProposal={onReviewProposal}
               onEditProposal={onEditProposal}
               onWithdrawProposal={onWithdrawProposal}
@@ -1144,6 +1157,14 @@ function WeatherTab({ trip }: { trip: SavedTrip }) {
 // Follower. Followers suggest and comment; only the Master Planner approves.
 type TripRole = 'owner' | 'collaborator';
 
+// A drafted-but-unsent suggestion, shown to the suggester for confirmation.
+interface PatchPreview {
+  prompt: string;
+  dayIndex: number | null;
+  patch: ItineraryPatch;
+  wouldChange: boolean;
+}
+
 const ROLE_LABELS: Record<TripRole, string> = {
   owner: 'Master Planner',
   collaborator: 'Follower',
@@ -1316,6 +1337,8 @@ function DayProposalBox({
   proposals,
   submitting,
   onSubmit,
+  onPreview,
+  onSendApproved,
   onReview,
   onEdit,
   onWithdraw,
@@ -1326,6 +1349,8 @@ function DayProposalBox({
   role: TripRole | null;
   proposals: TripProposal[];
   submitting: boolean;
+  onPreview: (day: number, prompt: string) => Promise<PatchPreview | null>;
+  onSendApproved: (day: number, prompt: string, patch: ItineraryPatch) => Promise<boolean>;
   onSubmit: (day: number, prompt: string) => Promise<boolean>;
   onReview: (proposalId: string, action: 'accept' | 'reject') => void;
   onEdit: (proposalId: string, prompt: string) => Promise<boolean>;
@@ -1334,13 +1359,39 @@ function DayProposalBox({
   userId?: string;
 }) {
   const [input, setInput] = useState('');
+  const [preview, setPreview] = useState<PatchPreview | null>(null);
+  const [previewing, setPreviewing] = useState(false);
+  const [sending, setSending] = useState(false);
   const canReview = canReviewRole(role);
+  // Only the suggester whose change needs someone else's approval confirms it
+  // first — the Master Planner reviews their own suggestions in the same panel.
+  const needsConfirm = role === 'collaborator';
 
   if (role === null) return null;
 
   const submit = async () => {
-    if (!input.trim() || submitting) return;
-    if (await onSubmit(day, input)) setInput('');
+    if (!input.trim() || submitting || previewing) return;
+
+    if (!needsConfirm) {
+      if (await onSubmit(day, input)) setInput('');
+      return;
+    }
+
+    setPreviewing(true);
+    const result = await onPreview(day, input);
+    setPreviewing(false);
+    if (result) setPreview(result);
+  };
+
+  const confirmSend = async () => {
+    if (!preview || sending) return;
+    setSending(true);
+    const ok = await onSendApproved(day, preview.prompt, preview.patch);
+    setSending(false);
+    if (ok) {
+      setPreview(null);
+      setInput('');
+    }
   };
 
   return (
@@ -1348,29 +1399,66 @@ function DayProposalBox({
       <div className="flex items-center gap-1.5 text-[12px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
         <Sparkles size={12} className="text-blue-600" /> Suggest a change
       </div>
-      <div className="flex items-stretch gap-2">
-        <input
-          type="text"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && submit()}
-          placeholder={`Change something on Day ${day}...`}
-          disabled={submitting}
-          className="flex-1 min-w-0 text-[13px] border border-gray-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-blue-400 disabled:opacity-60"
-        />
-        <button
-          onClick={submit}
-          disabled={submitting || !input.trim()}
-          className="flex-shrink-0 px-3 py-1.5 text-[13px] font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1.5"
-        >
-          {submitting ? <span className="animate-spin">⟳</span> : <Sparkles size={13} />}
-          Suggest
-        </button>
-      </div>
-      {role === 'collaborator' && (
-        <div className="text-[11px] text-gray-400 dark:text-gray-500">
-          Sent to the Master Planner for approval.
+      {preview ? (
+        <div className="rounded-xl border border-blue-200 dark:border-blue-800/50 bg-blue-50/60 dark:bg-blue-900/15 p-2.5 space-y-2">
+          <div className="text-[12px] font-semibold text-gray-900 dark:text-gray-100">
+            Send this to the Master Planner?
+          </div>
+          <div className="text-[13px] text-gray-700 dark:text-gray-300">&ldquo;{preview.prompt}&rdquo;</div>
+          <div className="text-[12px] text-gray-600 dark:text-gray-400 bg-white/70 dark:bg-gray-900/40 rounded-lg p-2">
+            <span className="font-medium text-gray-600 dark:text-gray-300">AI patch:</span> {formatPatchPreview(preview.patch)}
+          </div>
+          {!preview.wouldChange && (
+            <div className="text-[11px] text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 rounded-lg px-2 py-1.5">
+              This doesn&apos;t match anything in the itinerary yet, so the Master Planner may not be
+              able to apply it. Naming the day or the exact stop usually helps.
+            </div>
+          )}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setPreview(null)}
+              disabled={sending}
+              className="flex-1 px-3 py-1.5 text-[13px] font-medium rounded-lg text-gray-600 dark:text-gray-300 hover:bg-white dark:hover:bg-gray-700 disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={confirmSend}
+              disabled={sending}
+              className="flex-1 px-3 py-1.5 text-[13px] font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-1.5"
+            >
+              {sending ? <span className="animate-spin">⟳</span> : <Check size={13} />}
+              Send for approval
+            </button>
+          </div>
         </div>
+      ) : (
+        <>
+          <div className="flex items-stretch gap-2">
+            <input
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && submit()}
+              placeholder={`Change something on Day ${day}...`}
+              disabled={submitting || previewing}
+              className="flex-1 min-w-0 text-[13px] border border-gray-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-blue-400 disabled:opacity-60"
+            />
+            <button
+              onClick={submit}
+              disabled={submitting || previewing || !input.trim()}
+              className="flex-shrink-0 px-3 py-1.5 text-[13px] font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1.5"
+            >
+              {submitting || previewing ? <span className="animate-spin">⟳</span> : <Sparkles size={13} />}
+              {previewing ? 'Drafting…' : 'Suggest'}
+            </button>
+          </div>
+          {role === 'collaborator' && (
+            <div className="text-[11px] text-gray-400 dark:text-gray-500">
+              You&apos;ll see the AI&apos;s change before it&apos;s sent to the Master Planner.
+            </div>
+          )}
+        </>
       )}
       {proposals.length > 0 && (
         <div className="space-y-2 pt-1">
@@ -1831,15 +1919,37 @@ function SavedTripCard({ trip, onUpdate, onDelete, onLeave, onPayloadRefresh, is
 
   const pendingProposals = proposals.filter((p) => p.status === 'pending');
 
+  // Drafts the AI patch without sending it, so the suggester can check it first.
+  const previewProposal = async (day: number, prompt: string): Promise<PatchPreview | null> => {
+    try {
+      const res = await fetch(`/api/saved-trips/${trip.id}/proposals/preview`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: prompt.trim(), dayIndex: day }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.error || 'Could not draft a suggestion from that.');
+        return null;
+      }
+      return data.preview || null;
+    } catch {
+      alert('Could not draft a suggestion from that.');
+      return null;
+    }
+  };
+
   // day is passed so the AI targets that day; the stored prompt stays as typed.
-  const submitProposal = async (day: number, prompt: string): Promise<boolean> => {
+  // A reviewed patch is sent back verbatim so the Master Planner sees exactly
+  // what was confirmed.
+  const submitProposal = async (day: number, prompt: string, patch?: ItineraryPatch): Promise<boolean> => {
     if (!prompt.trim() || submittingDay !== null) return false;
     setSubmittingDay(day);
     try {
       const res = await fetch(`/api/saved-trips/${trip.id}/proposals`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: prompt.trim(), dayIndex: day }),
+        body: JSON.stringify({ prompt: prompt.trim(), dayIndex: day, patch }),
       });
       const data = await res.json();
       if (data.proposal) {
@@ -2091,6 +2201,8 @@ function SavedTripCard({ trip, onUpdate, onDelete, onLeave, onPayloadRefresh, is
             proposals={proposals}
             submittingDay={submittingDay}
             onSubmitProposal={submitProposal}
+            onPreviewProposal={previewProposal}
+            onSendApprovedProposal={submitProposal}
             onReviewProposal={reviewProposal}
             onEditProposal={editProposal}
             onWithdrawProposal={withdrawProposal}
