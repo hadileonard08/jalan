@@ -1750,8 +1750,44 @@ function TripTabBar({
   );
 }
 
+// Icon button with a real tooltip. The native `title` tooltip takes a second to
+// appear and never shows on touch, so these read as unlabelled icons.
+function HeaderIconAction({
+  label,
+  onClick,
+  danger,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  danger?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="relative group flex items-center">
+      <button
+        onClick={onClick}
+        aria-label={label}
+        className={`w-10 h-10 md:w-auto md:h-auto md:p-1.5 rounded-lg transition-colors flex items-center justify-center text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700 ${
+          danger ? 'hover:text-red-600' : 'hover:text-blue-600'
+        }`}
+      >
+        {children}
+      </button>
+      <span
+        role="tooltip"
+        className="pointer-events-none absolute right-0 top-full mt-1.5 z-20 whitespace-nowrap rounded-lg bg-gray-900 px-2 py-1 text-[11px] font-medium text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 dark:bg-gray-700"
+      >
+        {label}
+      </span>
+    </div>
+  );
+}
+
 function SavedTripCard({ trip, onUpdate, onDelete, onLeave, onPayloadRefresh, isSignedIn, isOpen, activeTab }: { trip: SavedTrip; onUpdate: (trip: SavedTrip) => void; onDelete?: () => void; onLeave?: () => void; onPayloadRefresh: (tripId: string, payload: ChatPayload) => void; isSignedIn: boolean; isOpen: boolean; activeTab: TripTab }) {
   const { user } = useUser();
+  // Leaving and deleting are both destructive, so ask first.
+  const [confirming, setConfirming] = useState<'leave' | 'delete' | null>(null);
   const [todoText, setTodoText] = useState('');
   const [noteText, setNoteText] = useState('');
   const [proposals, setProposals] = useState<TripProposal[]>([]);
@@ -1981,49 +2017,67 @@ function SavedTripCard({ trip, onUpdate, onDelete, onLeave, onPayloadRefresh, is
             </div>
           )}
         </div>
-        <div className="flex items-center gap-0.5 md:gap-1 flex-shrink-0">
-          <button
-            onClick={copyToClipboard}
-            className="text-gray-400 dark:text-gray-500 hover:text-blue-600 w-10 h-10 md:w-auto md:h-auto md:p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center justify-center"
-            title="Copy trip summary"
-            aria-label="Copy trip summary"
-          >
+        <div className="relative flex items-center gap-0.5 md:gap-1 flex-shrink-0">
+          <HeaderIconAction label="Copy trip summary" onClick={copyToClipboard}>
             <Clipboard size={18} className="md:hidden" />
             <Clipboard size={16} className="hidden md:block" />
-          </button>
+          </HeaderIconAction>
+
           {canReviewRole(proposalRole) && (
-            <button
-              onClick={() => setSharingOpen(true)}
-              className="text-gray-400 dark:text-gray-500 hover:text-blue-600 w-10 h-10 md:w-auto md:h-auto md:p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center justify-center"
-              title="Invite people to this trip"
-              aria-label="Invite people to this trip"
-            >
+            <HeaderIconAction label="Invite people to this trip" onClick={() => setSharingOpen(true)}>
               <UserPlus size={18} className="md:hidden" />
               <UserPlus size={16} className="hidden md:block" />
-            </button>
+            </HeaderIconAction>
           )}
+
           {proposalRole && proposalRole !== 'owner' && onLeave ? (
-            <button
-              onClick={onLeave}
-              className="text-gray-400 dark:text-gray-500 hover:text-red-600 w-10 h-10 md:w-auto md:h-auto md:p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center justify-center"
-              title="Leave this trip"
-              aria-label="Leave this trip"
-            >
+            <HeaderIconAction label="Leave this trip" danger onClick={() => setConfirming('leave')}>
               <LogOut size={18} className="md:hidden" />
               <LogOut size={16} className="hidden md:block" />
-            </button>
+            </HeaderIconAction>
           ) : (
             onDelete && (
-              <button
-                onClick={onDelete}
-                className="text-gray-400 dark:text-gray-500 hover:text-red-600 w-10 h-10 md:w-auto md:h-auto md:p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center justify-center"
-                title="Delete trip"
-                aria-label="Delete trip"
-              >
+              <HeaderIconAction label="Delete trip" danger onClick={() => setConfirming('delete')}>
                 <Trash2 size={18} className="md:hidden" />
                 <Trash2 size={16} className="hidden md:block" />
-              </button>
+              </HeaderIconAction>
             )
+          )}
+
+          {confirming && (
+            <>
+              {/* Click anywhere else to dismiss without acting. */}
+              <div className="fixed inset-0 z-20" onClick={() => setConfirming(null)} />
+              <div className="absolute right-0 top-full mt-2 z-30 w-64 rounded-xl border border-black/[0.06] dark:border-white/[0.12] bg-white dark:bg-[#2c2c2e] p-3 shadow-[0_12px_40px_rgba(0,0,0,0.18)]">
+                <p className="text-[13px] font-semibold text-gray-900 dark:text-gray-100">
+                  {confirming === 'leave' ? 'Leave this trip?' : 'Delete this trip?'}
+                </p>
+                <p className="text-[12px] text-gray-500 dark:text-gray-400 mt-1">
+                  {confirming === 'leave'
+                    ? 'It stays in the Master Planner’s One Stop. You’ll need a new invite link to come back.'
+                    : 'This removes the trip for everyone on it, and can’t be undone.'}
+                </p>
+                <div className="flex items-center gap-2 mt-3">
+                  <button
+                    onClick={() => setConfirming(null)}
+                    className="flex-1 px-3 py-1.5 text-[13px] font-medium rounded-lg text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => {
+                      const action = confirming;
+                      setConfirming(null);
+                      if (action === 'leave') onLeave?.();
+                      else onDelete?.();
+                    }}
+                    className="flex-1 px-3 py-1.5 text-[13px] font-medium rounded-lg bg-red-600 text-white hover:bg-red-700"
+                  >
+                    {confirming === 'leave' ? 'Leave' : 'Delete'}
+                  </button>
+                </div>
+              </div>
+            </>
           )}
         </div>
       </div>
