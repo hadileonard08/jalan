@@ -10,6 +10,7 @@ import { getAirlineBookingUrl } from '@/lib/airline-booking';
 import useSWR, { mutate } from 'swr';
 import type { ChatMessageUI, ChatPayload, SavedTrip, RouteLink } from '@/lib/chat-state';
 import { mergeServerTrips } from '@/lib/saved-trips-merge';
+import { peekPendingInvite, clearPendingInvite } from '@/lib/pending-invite';
 import OneStopPanel from './OneStopPanel';
 import TravelerProfileModal from './TravelerProfileModal';
 import ThemeToggle from '@/components/ThemeToggle';
@@ -676,6 +677,33 @@ export default function ChatPage() {
         if (raw) setSavedTrips(JSON.parse(raw));
       } catch { /* ignore */ }
     }
+  }, [isLoaded, isSignedIn]);
+
+  // Finish an invitation that was interrupted by a sign-in redirect. Signing in
+  // with Google can land the user on this page instead of the invite URL, which
+  // would otherwise leave them signed in but not on the trip.
+  useEffect(() => {
+    if (!isLoaded || !isSignedIn) return;
+    const token = peekPendingInvite();
+    if (!token) return;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/invites/${token}`, { method: 'POST' });
+        // A dead token will never work — stop retrying it on every load.
+        if (res.status === 404 || res.status === 410) { clearPendingInvite(); return; }
+        if (!res.ok) return;
+
+        clearPendingInvite();
+        const listRes = await fetch('/api/saved-trips');
+        const data = await listRes.json();
+        if (!cancelled && data.trips) {
+          setSavedTrips((prev) => mergeServerTrips(prev, data.trips));
+        }
+      } catch { /* try again on the next load */ }
+    })();
+    return () => { cancelled = true; };
   }, [isLoaded, isSignedIn]);
 
   // Persist saved trips to localStorage (always, as a fallback for guests).

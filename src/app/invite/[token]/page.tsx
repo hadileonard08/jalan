@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { Plane, MapPin, Calendar, Check, Loader2, UserCog } from 'lucide-react';
+import { Plane, MapPin, Calendar, Check, Loader2 } from 'lucide-react';
 import { useUser, SignInButtonWrapper } from '@/components/AuthProvider';
+import { rememberPendingInvite, clearPendingInvite } from '@/lib/pending-invite';
 
 interface InviteInfo {
   invite: { role: 'owner' | 'collaborator'; roleLabel: string; expiresAt: string | null };
@@ -18,35 +19,56 @@ export default function InvitePage() {
   const { isLoaded, isSignedIn } = useUser();
 
   const [info, setInfo] = useState<InviteInfo | null>(null);
-  const [error, setError] = useState('');
+  const [loadError, setLoadError] = useState('');
+  const [joinError, setJoinError] = useState('');
   const [joining, setJoining] = useState(false);
   const [joined, setJoined] = useState(false);
 
+  // Joining is attempted automatically, once, as soon as the visitor is signed
+  // in. Opening an invite link is the intent — making people hunt for a second
+  // button after signing up is how they end up with an empty One Stop.
+  const autoJoinedRef = useRef(false);
+
   useEffect(() => {
     if (!token) return;
+    setLoadError('');
     fetch(`/api/invites/${token}`)
       .then(async (r) => {
         const data = await r.json();
         if (!r.ok) throw new Error(data.error || 'Invite not found');
         setInfo(data);
         setJoined(!!data.alreadyMember);
+        // Survive a sign-in redirect that doesn't come back to this URL.
+        if (!data.alreadyMember) rememberPendingInvite(token);
       })
-      .catch((err) => setError(err.message || 'Invite not found'));
+      .catch((err) => setLoadError(err.message || 'Invite not found'));
   }, [token, isSignedIn]);
 
-  const join = async () => {
+  const join = useCallback(async () => {
     setJoining(true);
+    setJoinError('');
     try {
       const res = await fetch(`/api/invites/${token}`, { method: 'POST' });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to join');
       setJoined(true);
+      clearPendingInvite();
       router.refresh();
     } catch (err: any) {
-      setError(err.message || 'Failed to join');
+      setJoinError(err.message || 'Failed to join the trip');
+      // Allow another attempt if it failed.
+      autoJoinedRef.current = false;
     }
     setJoining(false);
-  };
+  }, [token, router]);
+
+  useEffect(() => {
+    if (!info || !isLoaded || !isSignedIn) return;
+    if (joined || info.alreadyMember) return;
+    if (autoJoinedRef.current) return;
+    autoJoinedRef.current = true;
+    void join();
+  }, [info, isLoaded, isSignedIn, joined, join]);
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-[#1c1c1e] p-4">
@@ -55,9 +77,9 @@ export default function InvitePage() {
           <Plane size={20} className="text-blue-600" /> Jalan
         </div>
 
-        {error ? (
+        {loadError ? (
           <div className="text-center py-6">
-            <p className="text-sm text-gray-600 dark:text-gray-300">{error}</p>
+            <p className="text-sm text-gray-600 dark:text-gray-300">{loadError}</p>
             <a href="/" className="inline-block mt-4 text-sm text-blue-600 hover:underline">
               Back to Jalan
             </a>
@@ -83,26 +105,19 @@ export default function InvitePage() {
             </div>
 
             <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 p-3">
-              <div className="flex items-center gap-2 text-[13px] text-gray-700 dark:text-gray-300">
-                <UserCog size={14} className="text-blue-600" />
-                You&apos;ll join as <span className="font-semibold">{info.invite.roleLabel}</span>
-              </div>
-              <p className="text-[12px] text-gray-500 dark:text-gray-400 mt-1">
-                Followers can comment and suggest changes. The Master Planner approves them.
+              <p className="text-[12px] text-gray-500 dark:text-gray-400">
+                You&apos;ll join as a <span className="font-semibold text-gray-700 dark:text-gray-300">Follower</span>.
+                Followers can comment and suggest changes; the Master Planner approves them.
               </p>
             </div>
 
-            {!isLoaded ? (
-              <div className="flex items-center justify-center py-2 text-gray-400">
-                <Loader2 size={18} className="animate-spin" />
-              </div>
-            ) : joined ? (
+            {joined ? (
               <div className="space-y-3">
                 <div className="flex items-center gap-2 text-sm text-green-700 dark:text-green-300 bg-green-50 dark:bg-green-900/20 rounded-lg px-3 py-2">
                   <Check size={16} /> You&apos;re on this trip.
                 </div>
                 <p className="text-[12px] text-gray-500 dark:text-gray-400">
-                  The trip is now in your One Stop panel — open Jalan and pick it from the trip list.
+                  It&apos;s now in your One Stop panel — open Jalan and pick it from the trip list.
                 </p>
                 <button
                   onClick={() => router.push('/')}
@@ -111,10 +126,14 @@ export default function InvitePage() {
                   Go to Jalan
                 </button>
               </div>
+            ) : !isLoaded ? (
+              <div className="flex items-center justify-center py-2 text-gray-400">
+                <Loader2 size={18} className="animate-spin" />
+              </div>
             ) : !isSignedIn ? (
               <div className="space-y-2">
                 <p className="text-[13px] text-gray-500 dark:text-gray-400">
-                  Sign in to accept this invitation.
+                  Sign in or sign up and you&apos;ll be added to the trip automatically.
                 </p>
                 <SignInButtonWrapper mode="modal">
                   <button className="w-full bg-blue-600 text-white text-sm font-medium px-4 py-2 rounded-lg hover:bg-blue-700">
@@ -123,14 +142,24 @@ export default function InvitePage() {
                 </SignInButtonWrapper>
               </div>
             ) : (
-              <button
-                onClick={join}
-                disabled={joining}
-                className="w-full bg-blue-600 text-white text-sm font-medium px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-1.5"
-              >
-                {joining ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
-                {joining ? 'Joining...' : 'Join trip'}
-              </button>
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
+                  {joining ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
+                  {joining ? 'Adding you to the trip…' : 'Ready to join'}
+                </div>
+                {joinError && (
+                  <>
+                    <p className="text-[12px] text-red-600 dark:text-red-400">{joinError}</p>
+                    <button
+                      onClick={join}
+                      disabled={joining}
+                      className="w-full bg-blue-600 text-white text-sm font-medium px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                    >
+                      Try again
+                    </button>
+                  </>
+                )}
+              </div>
             )}
           </div>
         )}
