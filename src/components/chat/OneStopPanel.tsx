@@ -87,6 +87,56 @@ function extractStopsFromItinerary(itinerary: string): { day: string; stops: { n
   return result;
 }
 
+// Grows with what you type instead of scrolling a one-line box, so a longer
+// comment or suggestion stays readable. Enter sends, Shift+Enter adds a line.
+function AutoGrowTextarea({
+  value,
+  onChange,
+  onSubmit,
+  placeholder,
+  disabled,
+  ariaLabel,
+  autoFocus,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  onSubmit: () => void;
+  placeholder: string;
+  disabled?: boolean;
+  ariaLabel?: string;
+  autoFocus?: boolean;
+}) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    // Reset first, otherwise the box can only ever grow.
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+  }, [value]);
+
+  return (
+    <textarea
+      ref={ref}
+      rows={1}
+      value={value}
+      aria-label={ariaLabel}
+      autoFocus={autoFocus}
+      onChange={(e) => onChange(e.target.value)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          onSubmit();
+        }
+      }}
+      placeholder={placeholder}
+      disabled={disabled}
+      className="flex-1 min-w-0 text-[15px] leading-6 border border-gray-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-400 disabled:opacity-60 resize-none max-h-40 overflow-y-auto"
+    />
+  );
+}
+
 // --- Stop feedback (thumbs up/down + comments) ---
 
 function getStopFeedback(trip: SavedTrip, stopId: string): StopFeedback {
@@ -205,7 +255,7 @@ function StopFeedbackBar({
         <div className="mt-2 space-y-2">
           {fb.comments.map((c) => (
             <div key={c.id} className="flex items-start gap-2 group">
-              <div className="flex-1 text-[13px] text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/50 rounded-lg px-2.5 py-1.5">
+              <div className="flex-1 min-w-0 text-[13px] text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/50 rounded-lg px-2.5 py-1.5 whitespace-pre-wrap break-words">
                 <span className="font-medium text-gray-700 dark:text-gray-300">{c.author}: </span>
                 {c.text}
                 <span className="text-gray-400 dark:text-gray-600 ml-1">· {formatDateTime(c.createdAt)}</span>
@@ -364,7 +414,7 @@ function DayFeedbackBar({
         <div className="max-h-80 overflow-y-auto py-2 space-y-2">
           {fb.comments.map((c) => (
             <div key={c.id} className="flex items-start gap-2 group">
-              <div className="flex-1 text-[13px] text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/50 rounded-lg px-2.5 py-1.5">
+              <div className="flex-1 min-w-0 text-[13px] text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/50 rounded-lg px-2.5 py-1.5 whitespace-pre-wrap break-words">
                 <span className="font-medium text-gray-700 dark:text-gray-300">{c.author}: </span>
                 {c.text}
                 <span className="text-gray-400 dark:text-gray-600 ml-1">· {formatDateTime(c.createdAt)}</span>
@@ -381,19 +431,18 @@ function DayFeedbackBar({
       </div>
 
       <div className={`pt-2 border-t border-gray-100 dark:border-gray-700/50 ${showComments ? 'block' : 'hidden md:block'}`}>
-        <div className="flex items-center gap-2">
-          <input
-            type="text"
+        <div className="flex items-end gap-2">
+          <AutoGrowTextarea
             value={commentText}
-            onChange={(e) => setCommentText(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && addComment()}
+            onChange={setCommentText}
+            onSubmit={addComment}
             placeholder="Add a comment..."
-            className="flex-1 min-w-0 text-[13px] border border-gray-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-blue-400"
+            ariaLabel={`Add a comment for Day ${dayIndex}`}
           />
           <button
             onClick={addComment}
             disabled={!commentText.trim()}
-            className="flex-shrink-0 px-3 py-1.5 text-[13px] font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+            className="flex-shrink-0 px-3.5 py-2 text-[13px] font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
           >
             Post
           </button>
@@ -1250,14 +1299,14 @@ function ProposalCard({
     <div className="border border-gray-200 dark:border-gray-700 rounded-xl p-2.5 bg-white dark:bg-gray-800 space-y-2">
       {editing ? (
         <div className="space-y-2">
-          <input
-            type="text"
+          <AutoGrowTextarea
             value={draft}
-            autoFocus
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && saveEdit()}
+            onChange={setDraft}
+            onSubmit={saveEdit}
+            placeholder="Describe the change..."
             disabled={regenerating}
-            className="w-full text-[13px] border border-gray-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-blue-400 disabled:opacity-60"
+            ariaLabel="Edit this suggestion"
+            autoFocus
           />
           <div className="flex items-center gap-2">
             <button
@@ -1278,7 +1327,7 @@ function ProposalCard({
           </div>
         </div>
       ) : (
-        <div className="text-[13px] text-gray-900 dark:text-gray-100">&ldquo;{proposal.suggestedPrompt}&rdquo;</div>
+        <div className="text-[13px] text-gray-900 dark:text-gray-100 whitespace-pre-wrap break-words">&ldquo;{proposal.suggestedPrompt}&rdquo;</div>
       )}
 
       <div className="text-[12px] text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-900/40 rounded-lg p-2">
@@ -1434,30 +1483,29 @@ function DayProposalBox({
         </div>
       ) : (
         <>
-          <div className="flex items-stretch gap-2">
-            <input
-              type="text"
+          <div className="flex items-end gap-2">
+            <AutoGrowTextarea
               value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && submit()}
+              onChange={setInput}
+              onSubmit={submit}
               placeholder={`Change something on Day ${day}...`}
               disabled={submitting || previewing}
-              className="flex-1 min-w-0 text-[13px] border border-gray-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-blue-400 disabled:opacity-60"
+              ariaLabel={`Suggest a change for Day ${day}`}
             />
             <button
               onClick={submit}
               disabled={submitting || previewing || !input.trim()}
-              className="flex-shrink-0 px-3 py-1.5 text-[13px] font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1.5"
+              className="flex-shrink-0 px-3.5 py-2 text-[13px] font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1.5"
             >
               {submitting || previewing ? <span className="animate-spin">⟳</span> : <Sparkles size={13} />}
               {previewing ? 'Drafting…' : 'Suggest'}
             </button>
           </div>
-          {role === 'collaborator' && (
-            <div className="text-[11px] text-gray-400 dark:text-gray-500">
-              You&apos;ll see the AI&apos;s change before it&apos;s sent to the Master Planner.
-            </div>
-          )}
+          <div className="text-[11px] text-gray-400 dark:text-gray-500">
+            {role === 'collaborator'
+              ? 'You’ll see the AI’s change before it’s sent to the Master Planner.'
+              : 'Enter to send · Shift+Enter for a new line.'}
+          </div>
         </>
       )}
       {proposals.length > 0 && (
