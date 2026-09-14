@@ -59,7 +59,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
           }))
       : [];
 
-    const options = await generateItineraryPatchOptions(
+    const reply = await generateItineraryPatchOptions(
       itinerary,
       trip.destination || 'the destination',
       day ? `Day ${day}: ${prompt.trim()}` : prompt.trim(),
@@ -70,7 +70,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     // against it. Without the diff, a pre-existing problem on an untouched day
     // (Bali's Day 6 has no time blocks) would be pinned on the suggestion.
     const checked = await Promise.all(
-      options.map(async (option) => {
+      reply.options.map(async (option) => {
         // A patch that matches nothing is rejected on accept (422), so catching
         // it here saves the Master Planner a dead suggestion.
         const merged = mergeItineraryPatch(itinerary, option.patch);
@@ -95,7 +95,12 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         // or a date mismatch that nothing else would catch.
         const [before, after] = await Promise.all([
           runItineraryChecks({ itinerary, ...base, landmarkScope: scopeOf(itinerary) }),
-          runItineraryChecks({ itinerary: merged, ...base, landmarkScope: scopeOf(merged) }),
+          runItineraryChecks({
+            itinerary: merged,
+            ...base,
+            landmarkScope: scopeOf(merged),
+            includeVenueStatus: true,
+          }),
         ]);
 
         const findings: ItineraryCheckResult = {
@@ -107,7 +112,12 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     );
 
     return NextResponse.json({
-      preview: { prompt: prompt.trim(), dayIndex: day, options: checked },
+      preview: {
+        prompt: prompt.trim(),
+        dayIndex: day,
+        answer: reply.answer || null,
+        options: checked,
+      },
     });
   } catch (error) {
     console.error('Proposal preview error:', error);

@@ -9,10 +9,21 @@ export interface RouteLink {
   url: string;
 }
 
-function extractLandmarkNames(itinerary: string): string[] {
-  const matches = Array.from(itinerary.matchAll(/!\[IMAGE:\s*([^\]]+)\]/g));
-  const names = matches.map((m) => m[1].trim()).filter(Boolean);
-  return [...new Set(names)];
+export function extractLandmarkNames(itinerary: string): string[] {
+  // Generated itineraries carry `![IMAGE: landmark]` placeholders, but a saved
+  // one has been hydrated to `![landmark](url)`. Reading only the placeholder
+  // form meant landmark verification silently did nothing for saved trips.
+  const names: string[] = [];
+  for (const match of itinerary.matchAll(/!\[IMAGE:\s*([^\]]+)\]/gi)) {
+    names.push(match[1].trim());
+  }
+  for (const match of itinerary.matchAll(/!\[([^\]]+)\]\([^)]*\)/g)) {
+    const alt = match[1].trim();
+    // Skip the placeholder form (already collected) and empty alts.
+    if (!alt || /^IMAGE:/i.test(alt)) continue;
+    names.push(alt);
+  }
+  return [...new Set(names.filter(Boolean))];
 }
 
 async function wikipediaSearchExists(term: string): Promise<boolean> {

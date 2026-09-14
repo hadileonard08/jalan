@@ -361,12 +361,23 @@ const PatchOptionSchema = z.object({
 });
 
 const PatchOptionsSchema = z.object({
-  options: z.array(PatchOptionSchema).min(1).max(4),
+  // A plain answer, when the user asked a question rather than for a change.
+  answer: z
+    .string()
+    .optional()
+    .describe('A short answer to the user\'s question. Only when they asked a question.'),
+  options: z.array(PatchOptionSchema).max(4).default([]),
 });
 
 export interface ItineraryPatchOption {
   label: string;
   patch: ItineraryPatch;
+}
+
+export interface ItineraryPatchReply {
+  /** Set when the user asked a question instead of requesting a change. */
+  answer?: string;
+  options: ItineraryPatchOption[];
 }
 
 /**
@@ -379,7 +390,7 @@ export async function generateItineraryPatchOptions(
   destination: string,
   userQuery: string,
   conversation: { role: 'user' | 'assistant'; content: string }[] = [],
-): Promise<ItineraryPatchOption[]> {
+): Promise<ItineraryPatchReply> {
   if (!existingItinerary) {
     throw new Error('No existing itinerary to refine.');
   }
@@ -393,6 +404,11 @@ export async function generateItineraryPatchOptions(
     : '';
 
   const prompt = `${buildPatchPrompt(existingItinerary, destination, userQuery)}${historyBlock}
+
+Answering vs editing:
+- If the user is ASKING A QUESTION rather than asking for a change — "what is X", "is that any good", "how far is it", "why did you pick that", "what are the hours" — answer it in the \`answer\` field, in 1-3 sentences, using the itinerary and your own knowledge of the destination. Return NO options.
+- If the user wants something changed, put the edits in \`options\` and leave \`answer\` out.
+- Never answer a question by silently editing the itinerary, and never edit when they only asked something.
 
 Returning options:
 - If the request asks for alternatives ("give me 2 options", "any other ideas", "what else", "a few choices"), return up to 4 DISTINCT options. Each must be a genuinely different choice — a different venue or a different approach — not a rewording of the same edit.
@@ -408,7 +424,10 @@ Returning options:
   const result = await structured.invoke(prompt);
   const parsed = PatchOptionsSchema.parse(result);
 
-  return meaningfulPatchOptions(parsed.options);
+  return {
+    answer: parsed.answer?.trim() || undefined,
+    options: meaningfulPatchOptions(parsed.options),
+  };
 }
 
 /**
@@ -417,6 +436,7 @@ Returning options:
  * preview reports as a warning rather than hiding).
  */
 export function meaningfulPatchOptions(options: ItineraryPatchOption[]): ItineraryPatchOption[] {
+  if (options.length === 0) return [];
   const meaningful = options.filter((option) => option.patch.edits.length > 0);
   return meaningful.length > 0 ? meaningful : options.slice(0, 1);
 }

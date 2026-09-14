@@ -7,7 +7,7 @@ import {
   MapPin, Calendar, Map, Bell, ThumbsUp, ThumbsDown, MessageSquare,
   FileText, Upload, Download, Hotel, Train, Car, ChevronDown, ChevronUp,
   AlertTriangle, Sparkles, UserCog, UserPlus, Link2, Check, LogOut,
-  List, Sun, Briefcase, Crown, Navigation,
+  List, Sun, Briefcase, Crown, Navigation, Send,
 } from 'lucide-react';
 import { useUser } from '@/components/AuthProvider';
 import type {
@@ -1228,12 +1228,15 @@ interface PatchOption {
 interface PatchPreview {
   prompt: string;
   dayIndex: number | null;
+  answer?: string | null;
   options: PatchOption[];
 }
 
-// One exchange in the drafting chat: what was asked, and what came back.
+// One exchange in the drafting chat: what was asked, and what came back — either
+// an answer, a set of options to pick from, or both.
 interface SuggestionTurn {
   prompt: string;
+  answer?: string | null;
   options: PatchOption[];
   selected: number;
 }
@@ -1478,8 +1481,11 @@ function DayProposalBox({
     ]);
     const result = await onPreview(day, prompt, history);
     setThinking(false);
-    if (result?.options?.length) {
-      setTurns((prev) => [...prev, { prompt, options: result.options, selected: 0 }]);
+    if (result && (result.options.length > 0 || result.answer)) {
+      setTurns((prev) => [
+        ...prev,
+        { prompt, answer: result.answer, options: result.options, selected: 0 },
+      ]);
       setInput('');
     }
   };
@@ -1487,6 +1493,7 @@ function DayProposalBox({
   const sendTurn = async (index: number) => {
     const turn = turns[index];
     const option = turn?.options[turn.selected];
+    // An answer-only turn has nothing to send.
     if (!option || sendingTurn !== null) return;
     setSendingTurn(index);
     const ok = await onSendApproved(day, turn.prompt, option.patch, canApplyDirectly);
@@ -1506,7 +1513,7 @@ function DayProposalBox({
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-2 text-[13px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
-        <Sparkles size={14} /> Suggest a change
+        <Send size={14} /> Ask or change something
       </div>
 
       {turns.map((turn, i) => {
@@ -1517,6 +1524,12 @@ function DayProposalBox({
               <span className="font-medium text-gray-500 dark:text-gray-400">You: </span>
               {turn.prompt}
             </div>
+            {turn.answer && (
+              <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/40 p-2.5 text-[13px] leading-6 text-gray-700 dark:text-gray-200 whitespace-pre-wrap break-words">
+                {turn.answer}
+              </div>
+            )}
+            {turn.options.length > 0 && (
             <div className="rounded-xl border border-blue-200 dark:border-blue-800/50 bg-blue-50/60 dark:bg-blue-900/15 p-2.5 space-y-2">
               <div className="text-[12px] font-semibold text-gray-900 dark:text-gray-100">
                 {turn.options.length > 1
@@ -1596,6 +1609,7 @@ function DayProposalBox({
                 </button>
               </div>
             </div>
+            )}
           </div>
         );
       })}
@@ -1611,7 +1625,7 @@ function DayProposalBox({
           value={input}
           onChange={setInput}
           onSubmit={send}
-          placeholder={turns.length ? 'Refine it, or ask for more options...' : 'Change something...'}
+          placeholder={turns.length ? 'Ask a question, or refine...' : 'Ask a question or request a change...'}
           disabled={submitting || thinking}
           ariaLabel={`Suggest a change for Day ${day}`}
         />
@@ -1620,14 +1634,14 @@ function DayProposalBox({
           disabled={submitting || thinking || !input.trim()}
           className="flex-shrink-0 px-3.5 py-2 text-[13px] font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1.5"
         >
-          {thinking ? <span className="animate-spin">⟳</span> : <Sparkles size={13} />}
-          {thinking ? 'Drafting…' : 'Suggest'}
+          {thinking ? <span className="animate-spin">⟳</span> : <Send size={13} />}
+          {thinking ? 'Thinking…' : 'Send'}
         </button>
       </div>
       <div className="text-[11px] text-gray-400 dark:text-gray-500">
         {canApplyDirectly
-          ? 'Nothing changes until you pick an option — ask for alternatives to compare.'
-          : 'Nothing is sent until you pick an option — ask for alternatives to compare.'}
+          ? 'Ask anything about the plan, or request a change — nothing changes until you pick an option.'
+          : 'Ask anything about the plan, or request a change — nothing is sent until you pick an option.'}
       </div>
 
       {canReview && proposals.length > 0 && (

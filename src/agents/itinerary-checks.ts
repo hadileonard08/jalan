@@ -1,4 +1,5 @@
-import { verifyItineraryLandmarks } from './itinerary-guardrails';
+import { verifyItineraryLandmarks, extractLandmarkNames } from './itinerary-guardrails';
+import { findPossiblyClosedVenues } from '../lib/venue-status';
 import { eveningFeasibilityWarnings } from '../lib/itinerary-feasibility';
 
 // Deterministic itinerary checks, shared by the generation graph and by the
@@ -139,6 +140,12 @@ export interface ItineraryCheckInput {
    * (a pre-existing landmark on another day isn't this suggestion's problem).
    */
   landmarkScope?: string;
+  /**
+   * Also ask whether venues are still open (a Wikipedia request each). Off by
+   * default: the generation path already makes two requests per landmark, and
+   * being throttled would quietly weaken the existence check.
+   */
+  includeVenueStatus?: boolean;
 }
 
 export interface ItineraryCheckResult {
@@ -160,6 +167,7 @@ export async function runItineraryChecks({
   endDate,
   durationDays,
   landmarkScope,
+  includeVenueStatus = false,
 }: ItineraryCheckInput): Promise<ItineraryCheckResult> {
   const feedback: string[] = [];
   if (!itinerary) return { feedback, advisory: [] };
@@ -201,6 +209,14 @@ export async function runItineraryChecks({
 
   // Advisory only: venues that close in the late afternoon sitting in the Evening.
   const advisory = eveningFeasibilityWarnings(itinerary);
+
+  // Advisory only: venues whose Wikipedia article reads like they have closed.
+  // Nothing else in the pipeline checks this — the guardrails only confirm a
+  // venue exists, and the Critic has no opening-status context to judge.
+  if (includeVenueStatus) {
+    const closed = await findPossiblyClosedVenues(extractLandmarkNames(landmarkScope || itinerary));
+    advisory.push(...closed.map((hint) => `${hint.name} — ${hint.reason}. Worth confirming before you go.`));
+  }
 
   return { feedback, advisory };
 }
