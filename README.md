@@ -485,7 +485,8 @@ A sign-in-gated full-page view accessible from the left sidebar that lets users:
 - **Followers never edit the itinerary directly.** They submit a natural-language suggestion under a specific day; `generateItineraryPatch()` turns it into a Zod-validated JSON patch stored as `pending`.
 - **Approval merges deterministically** — accepting runs the same `mergeItineraryPatch()` reducer the refine flow uses, so only the targeted day changes. A patch that no longer matches anything returns 422 instead of silently marking itself accepted.
 - **Approval refreshes what described the old stop** — the day's hero image, its Google Maps link, its map waypoints/polyline, and the transport notes in the text are rebuilt for the edited days only, so an approved change can't leave a stale photo or route behind. Best-effort: a failing refresh never fails the approval.
-- **Suggestion lifecycle** — the suggester can reword and regenerate a pending suggestion in place, or withdraw it. Reviewed suggestions are kept as the decision record.
+- **One input per day, two modes** — each day has a single box with a **Chat** / **Propose change** toggle: Chat posts a comment, Propose drafts an AI edit. They used to be two stacked inputs.
+- **Suggestion lifecycle** — the suggester can reword and regenerate a pending suggestion in place, or withdraw it. Reviewed suggestions collapse to a status pill plus a one-line summary so the day's feed stays short.
 - **Safe when two people act at once** — a suggestion is claimed with an atomic `pending → accepted` transition, so it can only be applied once, and the itinerary write is a compare-and-swap on a version counter, so a reviewer whose copy went stale is refused (409) instead of silently overwriting the other's change.
 - **Live propagation** — accepted changes reach other collaborators' open panels within ~30 seconds, and instantly when they reopen One Stop.
 

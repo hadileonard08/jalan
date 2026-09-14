@@ -317,21 +317,53 @@ function getDayFeedback(trip: SavedTrip, dayIndex: number): DayFeedback {
   };
 }
 
-function DayFeedbackBar({
-  dayIndex,
+// One input for the whole day: a Chat tab for comments and a Propose Change tab
+// that drafts an AI edit. They used to be two stacked boxes, which read as two
+// competing inputs.
+function DayCollaboration({
+  day,
+  role,
   trip,
   onUpdate,
+  proposals,
+  submitting,
+  onPreview,
+  onSendApproved,
+  onReview,
+  onEdit,
+  onWithdraw,
+  actionId,
+  userId,
 }: {
-  dayIndex: number;
+  day: number;
+  role: TripRole | null;
   trip: SavedTrip;
   onUpdate: (trip: SavedTrip) => void;
+  proposals: TripProposal[];
+  submitting: boolean;
+  onPreview: (day: number, prompt: string, history: DraftMessage[]) => Promise<PatchPreview | null>;
+  onSendApproved: (day: number, prompt: string, patch: ItineraryPatch, apply?: boolean) => Promise<boolean>;
+  onReview: (proposalId: string, action: 'accept' | 'reject') => void;
+  onEdit: (proposalId: string, prompt: string) => Promise<boolean>;
+  onWithdraw: (proposalId: string) => void;
+  actionId: string | null;
+  userId?: string;
 }) {
+  const [tab, setTab] = useState<'chat' | 'propose'>('chat');
+  const [input, setInput] = useState('');
   const [showComments, setShowComments] = useState(false);
-  const [commentText, setCommentText] = useState('');
-  const fb = getDayFeedback(trip, dayIndex);
+  const [turns, setTurns] = useState<SuggestionTurn[]>([]);
+  const [thinking, setThinking] = useState(false);
+  const [sendingTurn, setSendingTurn] = useState<number | null>(null);
+
+  const fb = getDayFeedback(trip, day);
+  const canReview = canReviewRole(role);
+  const canApplyDirectly = canReview;
+
+  if (role === null) return null;
 
   const vote = (direction: 'up' | 'down') => {
-    const current = getDayFeedback(trip, dayIndex);
+    const current = getDayFeedback(trip, day);
     const newFeedback: Record<string, DayFeedback> = { ...(trip.dayFeedback || {}) };
     let thumbsUp = current.thumbsUp;
     let thumbsDown = current.thumbsDown;
@@ -348,38 +380,83 @@ function DayFeedbackBar({
       else thumbsDown += 1;
     }
 
-    newFeedback[String(dayIndex)] = { ...current, thumbsUp, thumbsDown, userVote };
+    newFeedback[String(day)] = { ...current, thumbsUp, thumbsDown, userVote };
     onUpdate({ ...trip, dayFeedback: newFeedback });
   };
 
   const addComment = () => {
-    if (!commentText.trim()) return;
-    const current = getDayFeedback(trip, dayIndex);
+    const text = input.trim();
+    if (!text) return;
+    const current = getDayFeedback(trip, day);
     const newComment: DayComment = {
       id: crypto.randomUUID(),
       author: 'You',
-      text: commentText.trim(),
+      text,
       createdAt: new Date().toISOString(),
     };
     const newFeedback: Record<string, DayFeedback> = { ...(trip.dayFeedback || {}) };
-    newFeedback[String(dayIndex)] = { ...current, comments: [...current.comments, newComment] };
+    newFeedback[String(day)] = { ...current, comments: [...current.comments, newComment] };
     onUpdate({ ...trip, dayFeedback: newFeedback });
-    setCommentText('');
+    setInput('');
   };
 
   const deleteComment = (commentId: string) => {
-    const current = getDayFeedback(trip, dayIndex);
+    const current = getDayFeedback(trip, day);
     const newFeedback: Record<string, DayFeedback> = { ...(trip.dayFeedback || {}) };
-    newFeedback[String(dayIndex)] = {
+    newFeedback[String(day)] = {
       ...current,
       comments: current.comments.filter((c) => c.id !== commentId),
     };
     onUpdate({ ...trip, dayFeedback: newFeedback });
   };
 
+  const ask = async () => {
+    const prompt = input.trim();
+    if (!prompt || submitting || thinking) return;
+
+    setThinking(true);
+    const history: DraftMessage[] = turns.flatMap((turn) => [
+      { role: 'user' as const, content: turn.prompt },
+      {
+        role: 'assistant' as const,
+        content: turn.options.map((o) => `- ${o.label}: ${formatPatchPreview(o.patch)}`).join('\n'),
+      },
+    ]);
+    const result = await onPreview(day, prompt, history);
+    setThinking(false);
+    if (result && (result.options.length > 0 || result.answer)) {
+      setTurns((prev) => [
+        ...prev,
+        { prompt, answer: result.answer, options: result.options, selected: 0 },
+      ]);
+      setInput('');
+    }
+  };
+
+  const sendTurn = async (index: number) => {
+    const turn = turns[index];
+    const option = turn?.options[turn.selected];
+    // An answer-only turn has nothing to send.
+    if (!option || sendingTurn !== null) return;
+    setSendingTurn(index);
+    const ok = await onSendApproved(day, turn.prompt, option.patch, canApplyDirectly);
+    setSendingTurn(null);
+    if (ok) {
+      setTurns([]);
+      setInput('');
+    }
+  };
+
+  const submit = () => {
+    if (tab === 'chat') addComment();
+    else void ask();
+  };
+
+  const busy = tab === 'chat' ? !input.trim() : !input.trim() || submitting || thinking;
+
   return (
     <div className="h-full flex flex-col">
-      <div className="flex items-center gap-3 pb-3 border-b border-gray-100 dark:border-gray-700/50">
+      <div className="flex items-center gap-3 pb-2">
         <button
           onClick={() => vote('up')}
           className={`flex items-center gap-1 text-[13px] px-2 py-1 rounded-lg transition-colors ${
@@ -406,50 +483,213 @@ function DayFeedbackBar({
         </button>
         <button
           onClick={() => setShowComments(!showComments)}
-          className="md:hidden flex items-center gap-1 text-[13px] px-2 py-1 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
-          title="Comments"
+          className="md:hidden ml-auto flex items-center gap-1 text-[13px] px-2 py-1 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+          title="Show this day"
         >
           <MessageSquare size={14} />
           {showComments ? 'Hide' : `View ${fb.comments.length}`}
         </button>
       </div>
 
-      <div className={`flex-1 min-h-0 ${showComments ? 'block' : 'hidden md:block'}`}>
-        <div className="max-h-80 overflow-y-auto py-2 space-y-2">
-          {fb.comments.map((c) => (
-            <div key={c.id} className="flex items-start gap-2 group">
-              <div className="flex-1 min-w-0 text-[13px] text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/50 rounded-lg px-2.5 py-1.5 whitespace-pre-wrap break-words">
-                <span className="font-medium text-gray-700 dark:text-gray-300">{c.author}: </span>
-                {c.text}
-                <span className="text-gray-400 dark:text-gray-600 ml-1">· {formatDateTime(c.createdAt)}</span>
-              </div>
-              <button
-                onClick={() => deleteComment(c.id)}
-                className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-600 p-1"
-              >
-                <Trash2 size={12} />
-              </button>
-            </div>
+      <div className={`flex-1 min-h-0 flex flex-col ${showComments ? 'flex' : 'hidden md:flex'}`}>
+        {/* One input, two modes. */}
+        <div className="flex items-center gap-1 border-b border-gray-100 dark:border-gray-700/50">
+          {([
+            { key: 'chat', label: 'Chat', icon: MessageSquare },
+            { key: 'propose', label: 'Propose change', icon: Sparkles },
+          ] as const).map(({ key, label, icon: Icon }) => (
+            <button
+              key={key}
+              onClick={() => setTab(key)}
+              aria-selected={tab === key}
+              role="tab"
+              className={`flex items-center gap-1.5 px-3 py-2 text-[13px] transition-colors border-b-2 -mb-px ${
+                tab === key
+                  ? 'border-blue-500 text-blue-600 dark:text-blue-400 font-medium'
+                  : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
+              }`}
+            >
+              <Icon size={13} />
+              {label}
+            </button>
           ))}
         </div>
-      </div>
 
-      <div className={`pt-2 border-t border-gray-100 dark:border-gray-700/50 ${showComments ? 'block' : 'hidden md:block'}`}>
-        <div className="flex items-end gap-2">
-          <AutoGrowTextarea
-            value={commentText}
-            onChange={setCommentText}
-            onSubmit={addComment}
-            placeholder="Add a comment..."
-            ariaLabel={`Add a comment for Day ${dayIndex}`}
-          />
-          <button
-            onClick={addComment}
-            disabled={!commentText.trim()}
-            className="flex-shrink-0 px-3.5 py-2 text-[13px] font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
-          >
-            Post
-          </button>
+        <div className="flex-1 min-h-0 overflow-y-auto py-2 space-y-2">
+          {tab === 'chat' ? (
+            fb.comments.length === 0 ? (
+              <div className="text-[12px] text-gray-400 dark:text-gray-500 px-1">
+                No comments on this day yet.
+              </div>
+            ) : (
+              fb.comments.map((c) => (
+                <div key={c.id} className="flex items-start gap-2 group">
+                  <div className="flex-1 min-w-0 text-[13px] text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/50 rounded-2xl rounded-tl-sm px-3 py-2 whitespace-pre-wrap break-words">
+                    <span className="font-medium text-gray-700 dark:text-gray-300">{c.author}: </span>
+                    {c.text}
+                    <span className="text-gray-400 dark:text-gray-600 ml-1">· {formatDateTime(c.createdAt)}</span>
+                  </div>
+                  <button
+                    onClick={() => deleteComment(c.id)}
+                    className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-600 p-1"
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+              ))
+            )
+          ) : (
+            <>
+              {turns.map((turn, i) => {
+                const chosen = turn.options[turn.selected] || turn.options[0];
+                return (
+                  <div key={i} className="space-y-1.5">
+                    <div className="rounded-2xl rounded-tl-sm bg-gray-100 dark:bg-gray-700/40 px-3 py-2 text-[13px] leading-6 text-gray-700 dark:text-gray-200 whitespace-pre-wrap break-words">
+                      {turn.prompt}
+                    </div>
+                    {turn.answer && (
+                      <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/40 p-2.5 text-[13px] leading-6 text-gray-700 dark:text-gray-200 whitespace-pre-wrap break-words">
+                        {turn.answer}
+                      </div>
+                    )}
+                    {turn.options.length > 0 && (
+                      <div className="rounded-lg bg-blue-50 dark:bg-blue-900/20 p-2.5 space-y-2">
+                        <div className="text-[11px] font-semibold uppercase tracking-wide text-blue-700 dark:text-blue-300">
+                          {turn.options.length > 1
+                            ? `Suggested updates (${turn.options.length})`
+                            : 'Suggested update'}
+                        </div>
+                        <div className="space-y-1.5">
+                          {turn.options.map((option, oi) => (
+                            <button
+                              key={oi}
+                              onClick={() =>
+                                setTurns((prev) =>
+                                  prev.map((t, ti) => (ti === i ? { ...t, selected: oi } : t)),
+                                )
+                              }
+                              aria-pressed={turn.selected === oi}
+                              className={`w-full text-left rounded-lg border p-2 transition-colors ${
+                                turn.selected === oi
+                                  ? 'border-blue-400 bg-white dark:bg-gray-900/60'
+                                  : 'border-transparent hover:border-blue-300'
+                              }`}
+                            >
+                              <div className="text-[12px] font-medium text-blue-900 dark:text-blue-100">
+                                {option.label || `Option ${oi + 1}`}
+                              </div>
+                              <div className="text-[11px] text-blue-800/80 dark:text-blue-200/80 mt-0.5">
+                                {formatPatchPreview(option.patch)}
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+
+                        {chosen && !chosen.wouldChange && (
+                          <div className="text-[11px] text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 rounded-lg px-2 py-1.5">
+                            This doesn&apos;t match anything in the itinerary yet, so the Master Planner
+                            may not be able to apply it. Naming the day or the exact stop usually helps.
+                          </div>
+                        )}
+                        {!!chosen?.findings?.feedback.length && (
+                          <div className="text-[11px] text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-900/20 rounded-lg px-2 py-1.5 space-y-1">
+                            <div className="font-semibold">This would be flagged by the itinerary checks:</div>
+                            {chosen.findings.feedback.map((f, fi) => (
+                              <div key={fi}>• {f}</div>
+                            ))}
+                          </div>
+                        )}
+                        {!!chosen?.findings?.advisory.length && (
+                          <div className="text-[11px] text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 rounded-lg px-2 py-1.5 space-y-1">
+                            <div className="font-semibold">Worth a look:</div>
+                            {chosen.findings.advisory.map((f, fi) => (
+                              <div key={fi}>• {f}</div>
+                            ))}
+                          </div>
+                        )}
+
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => setTurns((prev) => prev.filter((_, ti) => ti !== i))}
+                            disabled={sendingTurn !== null}
+                            className="flex-1 px-3 py-1.5 text-[13px] font-medium rounded-lg text-gray-600 dark:text-gray-300 hover:bg-white dark:hover:bg-gray-700 disabled:opacity-50"
+                          >
+                            Discard
+                          </button>
+                          <button
+                            onClick={() => sendTurn(i)}
+                            disabled={sendingTurn !== null}
+                            className="flex-1 px-3 py-1.5 text-[13px] font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-1.5"
+                          >
+                            {sendingTurn === i ? <span className="animate-spin">⟳</span> : <Check size={13} />}
+                            {canApplyDirectly ? 'Apply' : 'Send'}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {thinking && (
+                <div className="text-[12px] text-gray-500 dark:text-gray-400 flex items-center gap-1.5">
+                  <span className="animate-spin">⟳</span> Thinking…
+                </div>
+              )}
+              {!turns.length && !thinking && (
+                <div className="text-[12px] text-gray-400 dark:text-gray-500 px-1">
+                  Ask about this day, or describe a change — for example &ldquo;give me 2 options for the
+                  evening&rdquo;.
+                </div>
+              )}
+            </>
+          )}
+
+          {/* The day's suggestions, in both tabs — they are the outcome either way. */}
+          {proposals.map((proposal) => (
+            <ProposalCard
+              key={proposal.id}
+              proposal={proposal}
+              canReview={canReview}
+              canEdit={!!userId && proposal.proposedByUserId === userId}
+              actionId={actionId}
+              onReview={onReview}
+              onEdit={onEdit}
+              onWithdraw={onWithdraw}
+            />
+          ))}
+        </div>
+
+        <div className="pt-2 border-t border-gray-100 dark:border-gray-700/50">
+          <div className="flex items-end gap-2">
+            <AutoGrowTextarea
+              value={input}
+              onChange={setInput}
+              onSubmit={submit}
+              placeholder={tab === 'chat' ? 'Add a comment...' : 'Ask a question or request a change...'}
+              disabled={tab === 'propose' && (submitting || thinking)}
+              ariaLabel={tab === 'chat' ? `Add a comment for Day ${day}` : `Suggest a change for Day ${day}`}
+            />
+            <button
+              onClick={submit}
+              disabled={busy}
+              className="flex-shrink-0 px-3.5 py-2 text-[13px] font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1.5"
+            >
+              {tab === 'chat' ? (
+                'Post'
+              ) : thinking ? (
+                <><span className="animate-spin">⟳</span> Thinking…</>
+              ) : (
+                <><Send size={13} /> Send</>
+              )}
+            </button>
+          </div>
+          <div className="text-[11px] text-gray-400 dark:text-gray-500 mt-1">
+            {tab === 'chat'
+              ? 'Comments are visible to everyone on the trip.'
+              : canApplyDirectly
+                ? 'Nothing changes until you pick an option — ask for alternatives to compare.'
+                : 'Nothing is sent until you pick an option — ask for alternatives to compare.'}
+          </div>
         </div>
       </div>
     </div>
@@ -537,10 +777,12 @@ function DayPanel({
             is in the Evening block.
           </div>
         )}
-        <DayFeedbackBar dayIndex={day} trip={trip} onUpdate={onUpdate} />
-        <DayProposalBox
+        {/* One box for the day: comment or propose, behind a tab. */}
+        <DayCollaboration
           day={day}
           role={proposalRole}
+          trip={trip}
+          onUpdate={onUpdate}
           proposals={proposals}
           submitting={submittingDay === day}
           onPreview={onPreviewProposal}
@@ -1315,6 +1557,7 @@ function ProposalCard({
   const [draft, setDraft] = useState(proposal.suggestedPrompt);
   const [regenerating, setRegenerating] = useState(false);
   const pending = proposal.status === 'pending';
+  const summary = formatPatchPreview(proposal.patchData);
 
   const saveEdit = async () => {
     if (!draft.trim() || regenerating) return;
@@ -1324,8 +1567,40 @@ function ProposalCard({
     if (ok) setEditing(false);
   };
 
+  // Decided suggestions collapse to one line: the daily feed shouldn't grow
+  // vertically with every past decision.
+  if (!pending) {
+    return (
+      <div className="flex items-center gap-2 rounded-xl border border-black/[0.05] dark:border-white/[0.08] bg-white/60 dark:bg-gray-800/40 px-2.5 py-2">
+        <span className={`text-[11px] flex-shrink-0 inline-flex items-center px-2 py-0.5 rounded-full ${PROPOSAL_STATUS_STYLES[proposal.status]}`}>
+          {proposal.status}
+        </span>
+        <span className="flex-1 min-w-0 text-[12px] text-gray-500 dark:text-gray-400 truncate" title={summary}>
+          {summary}
+        </span>
+        {proposal.reviewedAt && (
+          <span className="flex-shrink-0 text-[11px] text-gray-400 dark:text-gray-500">
+            {formatDateTime(proposal.reviewedAt)}
+          </span>
+        )}
+        {/* Changing your mind: a rejection can be reversed, since the itinerary
+            was never touched. An acceptance can't — the change is already in. */}
+        {canReview && proposal.status === 'rejected' && (
+          <button
+            onClick={() => onReview(proposal.id, 'accept')}
+            disabled={actionId === proposal.id}
+            className="flex-shrink-0 text-[12px] font-medium text-blue-600 dark:text-blue-400 hover:underline disabled:opacity-50"
+            title="Apply this change to the itinerary"
+          >
+            {actionId === proposal.id ? 'Applying…' : 'Accept anyway'}
+          </button>
+        )}
+      </div>
+    );
+  }
+
   return (
-    <div className="border border-gray-200 dark:border-gray-700 rounded-xl p-2.5 bg-white dark:bg-gray-800 space-y-2">
+    <div className="border border-black/[0.06] dark:border-white/[0.1] rounded-xl p-2.5 bg-white dark:bg-gray-800 space-y-2">
       {editing ? (
         <div className="space-y-2">
           <AutoGrowTextarea
@@ -1356,19 +1631,31 @@ function ProposalCard({
           </div>
         </div>
       ) : (
-        <div className="text-[13px] text-gray-900 dark:text-gray-100 whitespace-pre-wrap break-words">&ldquo;{proposal.suggestedPrompt}&rdquo;</div>
+        <>
+          {/* The human's request, as a speech bubble, so it reads differently
+              from anything the model produced. */}
+          <div className="rounded-2xl rounded-tl-sm bg-gray-100 dark:bg-gray-700/40 px-3 py-2 text-[13px] leading-6 text-gray-700 dark:text-gray-200 whitespace-pre-wrap break-words">
+            {proposal.suggestedPrompt}
+          </div>
+
+          {/* The AI's answer to it, in its own container. */}
+          <div className="rounded-lg bg-blue-50 dark:bg-blue-900/20 p-3">
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-blue-700 dark:text-blue-300">
+              Suggested update
+            </div>
+            <div className="text-[13px] leading-6 text-blue-900 dark:text-blue-100 mt-1 whitespace-pre-wrap break-words">
+              {summary}
+            </div>
+          </div>
+        </>
       )}
 
-      <div className="text-[12px] text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-900/40 rounded-lg p-2">
-        <span className="font-medium text-gray-600 dark:text-gray-300">AI patch:</span> {formatPatchPreview(proposal.patchData)}
-      </div>
-
-      {canReview && pending ? (
+      {canReview ? (
         <div className="flex items-center gap-2">
           <button
             onClick={() => onReview(proposal.id, 'accept')}
             disabled={actionId === proposal.id}
-            className="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 text-[13px] font-medium rounded-lg bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300 hover:bg-green-200 dark:hover:bg-green-900/50 disabled:opacity-60"
+            className="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 text-[13px] font-medium rounded-lg bg-green-600 text-white hover:bg-green-700 disabled:opacity-60"
           >
             {actionId === proposal.id ? <span className="animate-spin">⟳</span> : <CheckSquare size={13} />}
             Accept
@@ -1376,38 +1663,19 @@ function ProposalCard({
           <button
             onClick={() => onReview(proposal.id, 'reject')}
             disabled={actionId === proposal.id}
-            className="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 text-[13px] font-medium rounded-lg bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 hover:bg-red-200 dark:hover:bg-red-900/50 disabled:opacity-60"
+            className="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 text-[13px] font-medium rounded-lg text-red-600 dark:text-red-400 border border-red-200 dark:border-red-900/50 hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-60"
           >
             {actionId === proposal.id ? <span className="animate-spin">⟳</span> : <X size={13} />}
             Reject
           </button>
         </div>
       ) : (
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className={`text-[11px] inline-flex items-center px-2 py-0.5 rounded-full ${PROPOSAL_STATUS_STYLES[proposal.status]}`}>
-            {proposal.status}
-          </span>
-          {proposal.reviewedAt && (
-            <span className="text-[11px] text-gray-400 dark:text-gray-500">
-              {formatDateTime(proposal.reviewedAt)}
-            </span>
-          )}
-          {/* Changing your mind: a rejection can be reversed, since the itinerary
-              was never touched. An acceptance can't — the change is already in. */}
-          {canReview && proposal.status === 'rejected' && (
-            <button
-              onClick={() => onReview(proposal.id, 'accept')}
-              disabled={actionId === proposal.id}
-              className="text-[12px] font-medium text-blue-600 dark:text-blue-400 hover:underline disabled:opacity-50"
-              title="Apply this change to the itinerary"
-            >
-              {actionId === proposal.id ? 'Applying…' : 'Accept anyway'}
-            </button>
-          )}
-        </div>
+        <span className={`text-[11px] inline-flex items-center px-2 py-0.5 rounded-full ${PROPOSAL_STATUS_STYLES[proposal.status]}`}>
+          {proposal.status}
+        </span>
       )}
 
-      {canEdit && pending && !editing && (
+      {canEdit && !editing && (
         <div className="flex items-center gap-3 pt-0.5">
           <button
             onClick={() => setEditing(true)}
@@ -1421,243 +1689,6 @@ function ProposalCard({
           >
             Withdraw
           </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// Per-day "Suggest a change" box, rendered under that day's comment thread.
-function DayProposalBox({
-  day,
-  role,
-  proposals,
-  submitting,
-  onPreview,
-  onSendApproved,
-  onReview,
-  onEdit,
-  onWithdraw,
-  actionId,
-  userId,
-}: {
-  day: number;
-  role: TripRole | null;
-  proposals: TripProposal[];
-  submitting: boolean;
-  onPreview: (day: number, prompt: string, history: DraftMessage[]) => Promise<PatchPreview | null>;
-  onSendApproved: (day: number, prompt: string, patch: ItineraryPatch, apply?: boolean) => Promise<boolean>;
-  onReview: (proposalId: string, action: 'accept' | 'reject') => void;
-  onEdit: (proposalId: string, prompt: string) => Promise<boolean>;
-  onWithdraw: (proposalId: string) => void;
-  actionId: string | null;
-  userId?: string;
-}) {
-  const [input, setInput] = useState('');
-  // The drafting chat for this day. Each AI turn offers patches to pick from, and
-  // the suggester can keep refining before anything reaches the Master Planner.
-  const [turns, setTurns] = useState<SuggestionTurn[]>([]);
-  const [thinking, setThinking] = useState(false);
-  const [sendingTurn, setSendingTurn] = useState<number | null>(null);
-  const canReview = canReviewRole(role);
-  // Everyone drafts in the chat now. The difference is the last step: a Follower
-  // sends the change for approval, while the Master Planner applies it directly,
-  // since they are the one who would approve it anyway.
-  const canApplyDirectly = canReview;
-
-  if (role === null) return null;
-
-  const send = async () => {
-    const prompt = input.trim();
-    if (!prompt || submitting || thinking) return;
-
-    setThinking(true);
-    const history: DraftMessage[] = turns.flatMap((turn) => [
-      { role: 'user' as const, content: turn.prompt },
-      {
-        role: 'assistant' as const,
-        content: turn.options.map((o) => `- ${o.label}: ${formatPatchPreview(o.patch)}`).join('\n'),
-      },
-    ]);
-    const result = await onPreview(day, prompt, history);
-    setThinking(false);
-    if (result && (result.options.length > 0 || result.answer)) {
-      setTurns((prev) => [
-        ...prev,
-        { prompt, answer: result.answer, options: result.options, selected: 0 },
-      ]);
-      setInput('');
-    }
-  };
-
-  const sendTurn = async (index: number) => {
-    const turn = turns[index];
-    const option = turn?.options[turn.selected];
-    // An answer-only turn has nothing to send.
-    if (!option || sendingTurn !== null) return;
-    setSendingTurn(index);
-    const ok = await onSendApproved(day, turn.prompt, option.patch, canApplyDirectly);
-    setSendingTurn(null);
-    if (ok) {
-      // Sent — it now shows above (applied, or waiting for approval), so clear
-      // the draft thread.
-      setTurns([]);
-      setInput('');
-    }
-  };
-
-  const selectOption = (turnIndex: number, optionIndex: number) => {
-    setTurns((prev) => prev.map((t, i) => (i === turnIndex ? { ...t, selected: optionIndex } : t)));
-  };
-
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center gap-2 text-[13px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
-        <Send size={14} /> Ask or change something
-      </div>
-
-      {turns.map((turn, i) => {
-        const chosen = turn.options[turn.selected] || turn.options[0];
-        return (
-          <div key={i} className="space-y-1.5">
-            <div className="text-[13px] text-gray-700 dark:text-gray-300 break-words">
-              <span className="font-medium text-gray-500 dark:text-gray-400">You: </span>
-              {turn.prompt}
-            </div>
-            {turn.answer && (
-              <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/40 p-2.5 text-[13px] leading-6 text-gray-700 dark:text-gray-200 whitespace-pre-wrap break-words">
-                {turn.answer}
-              </div>
-            )}
-            {turn.options.length > 0 && (
-            <div className="rounded-xl border border-blue-200 dark:border-blue-800/50 bg-blue-50/60 dark:bg-blue-900/15 p-2.5 space-y-2">
-              <div className="text-[12px] font-semibold text-gray-900 dark:text-gray-100">
-                {turn.options.length > 1
-                  ? `Pick one (${turn.options.length} options)`
-                  : canApplyDirectly
-                    ? 'Apply this to the itinerary?'
-                    : 'Send this to the Master Planner?'}
-              </div>
-
-              {turn.options.length > 1 ? (
-                <div className="space-y-1.5">
-                  {turn.options.map((option, oi) => (
-                    <button
-                      key={oi}
-                      onClick={() => selectOption(i, oi)}
-                      aria-pressed={turn.selected === oi}
-                      className={`w-full text-left rounded-lg border p-2 transition-colors ${
-                        turn.selected === oi
-                          ? 'border-blue-400 bg-white dark:bg-gray-900/60'
-                          : 'border-gray-200 dark:border-gray-700 hover:border-blue-300'
-                      }`}
-                    >
-                      <div className="text-[12px] font-medium text-gray-900 dark:text-gray-100">
-                        {option.label || `Option ${oi + 1}`}
-                      </div>
-                      <div className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">
-                        {formatPatchPreview(option.patch)}
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <div className="text-[12px] text-gray-600 dark:text-gray-400 bg-white/70 dark:bg-gray-900/40 rounded-lg p-2">
-                  <span className="font-medium text-gray-600 dark:text-gray-300">AI patch:</span>{' '}
-                  {chosen ? formatPatchPreview(chosen.patch) : '—'}
-                </div>
-              )}
-
-              {chosen && !chosen.wouldChange && (
-                <div className="text-[11px] text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 rounded-lg px-2 py-1.5">
-                  This doesn&apos;t match anything in the itinerary yet, so the Master Planner may not
-                  be able to apply it. Naming the day or the exact stop usually helps.
-                </div>
-              )}
-              {!!chosen?.findings?.feedback.length && (
-                <div className="text-[11px] text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-900/20 rounded-lg px-2 py-1.5 space-y-1">
-                  <div className="font-semibold">This would be flagged by the itinerary checks:</div>
-                  {chosen.findings.feedback.map((f, fi) => (
-                    <div key={fi}>• {f}</div>
-                  ))}
-                </div>
-              )}
-              {!!chosen?.findings?.advisory.length && (
-                <div className="text-[11px] text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 rounded-lg px-2 py-1.5 space-y-1">
-                  <div className="font-semibold">Worth a look:</div>
-                  {chosen.findings.advisory.map((f, fi) => (
-                    <div key={fi}>• {f}</div>
-                  ))}
-                </div>
-              )}
-
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setTurns((prev) => prev.filter((_, ti) => ti !== i))}
-                  disabled={sendingTurn !== null}
-                  className="flex-1 px-3 py-1.5 text-[13px] font-medium rounded-lg text-gray-600 dark:text-gray-300 hover:bg-white dark:hover:bg-gray-700 disabled:opacity-50"
-                >
-                  Discard
-                </button>
-                <button
-                  onClick={() => sendTurn(i)}
-                  disabled={sendingTurn !== null}
-                  className="flex-1 px-3 py-1.5 text-[13px] font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-1.5"
-                >
-                  {sendingTurn === i ? <span className="animate-spin">⟳</span> : <Check size={13} />}
-                  {canApplyDirectly ? 'Apply to itinerary' : 'Send for approval'}
-                </button>
-              </div>
-            </div>
-            )}
-          </div>
-        );
-      })}
-
-      {thinking && (
-        <div className="text-[12px] text-gray-500 dark:text-gray-400 flex items-center gap-1.5">
-          <span className="animate-spin">⟳</span> Drafting…
-        </div>
-      )}
-
-      <div className="flex items-end gap-2">
-        <AutoGrowTextarea
-          value={input}
-          onChange={setInput}
-          onSubmit={send}
-          placeholder={turns.length ? 'Ask a question, or refine...' : 'Ask a question or request a change...'}
-          disabled={submitting || thinking}
-          ariaLabel={`Suggest a change for Day ${day}`}
-        />
-        <button
-          onClick={send}
-          disabled={submitting || thinking || !input.trim()}
-          className="flex-shrink-0 px-3.5 py-2 text-[13px] font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1.5"
-        >
-          {thinking ? <span className="animate-spin">⟳</span> : <Send size={13} />}
-          {thinking ? 'Thinking…' : 'Send'}
-        </button>
-      </div>
-      <div className="text-[11px] text-gray-400 dark:text-gray-500">
-        {canApplyDirectly
-          ? 'Ask anything about the plan, or request a change — nothing changes until you pick an option.'
-          : 'Ask anything about the plan, or request a change — nothing is sent until you pick an option.'}
-      </div>
-
-      {canReview && proposals.length > 0 && (
-        <div className="space-y-2 pt-1">
-          {proposals.map((proposal) => (
-            <ProposalCard
-              key={proposal.id}
-              proposal={proposal}
-              canReview={canReview}
-              canEdit={!!userId && proposal.proposedByUserId === userId}
-              actionId={actionId}
-              onReview={onReview}
-              onEdit={onEdit}
-              onWithdraw={onWithdraw}
-            />
-          ))}
         </div>
       )}
     </div>
