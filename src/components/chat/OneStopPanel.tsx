@@ -467,7 +467,6 @@ function DayPanel({
   proposalRole,
   proposals,
   submittingDay,
-  onSubmitProposal,
   onPreviewProposal,
   onSendApprovedProposal,
   onReviewProposal,
@@ -482,9 +481,8 @@ function DayPanel({
   proposalRole: TripRole | null;
   proposals: TripProposal[];
   submittingDay: number | null;
-  onSubmitProposal: (day: number, prompt: string, patch?: ItineraryPatch) => Promise<boolean>;
   onPreviewProposal: (day: number, prompt: string, history: DraftMessage[]) => Promise<PatchPreview | null>;
-  onSendApprovedProposal: (day: number, prompt: string, patch: ItineraryPatch) => Promise<boolean>;
+  onSendApprovedProposal: (day: number, prompt: string, patch: ItineraryPatch, apply?: boolean) => Promise<boolean>;
   onReviewProposal: (proposalId: string, action: 'accept' | 'reject') => void;
   onEditProposal: (proposalId: string, prompt: string) => Promise<boolean>;
   onWithdrawProposal: (proposalId: string) => void;
@@ -545,7 +543,6 @@ function DayPanel({
           role={proposalRole}
           proposals={proposals}
           submitting={submittingDay === day}
-          onSubmit={onSubmitProposal}
           onPreview={onPreviewProposal}
           onSendApproved={onSendApprovedProposal}
           onReview={onReviewProposal}
@@ -567,7 +564,6 @@ function ItineraryTab({
   proposalRole,
   proposals,
   submittingDay,
-  onSubmitProposal,
   onPreviewProposal,
   onSendApprovedProposal,
   onReviewProposal,
@@ -581,9 +577,8 @@ function ItineraryTab({
   proposalRole: TripRole | null;
   proposals: TripProposal[];
   submittingDay: number | null;
-  onSubmitProposal: (day: number, prompt: string, patch?: ItineraryPatch) => Promise<boolean>;
   onPreviewProposal: (day: number, prompt: string, history: DraftMessage[]) => Promise<PatchPreview | null>;
-  onSendApprovedProposal: (day: number, prompt: string, patch: ItineraryPatch) => Promise<boolean>;
+  onSendApprovedProposal: (day: number, prompt: string, patch: ItineraryPatch, apply?: boolean) => Promise<boolean>;
   onReviewProposal: (proposalId: string, action: 'accept' | 'reject') => void;
   onEditProposal: (proposalId: string, prompt: string) => Promise<boolean>;
   onWithdrawProposal: (proposalId: string) => void;
@@ -640,7 +635,6 @@ function ItineraryTab({
               proposalRole={proposalRole}
               proposals={proposals.filter((proposal) => proposalDays(proposal).includes(day))}
               submittingDay={submittingDay}
-              onSubmitProposal={onSubmitProposal}
               onPreviewProposal={onPreviewProposal}
               onSendApprovedProposal={onSendApprovedProposal}
               onReviewProposal={onReviewProposal}
@@ -1436,7 +1430,6 @@ function DayProposalBox({
   role,
   proposals,
   submitting,
-  onSubmit,
   onPreview,
   onSendApproved,
   onReview,
@@ -1450,8 +1443,7 @@ function DayProposalBox({
   proposals: TripProposal[];
   submitting: boolean;
   onPreview: (day: number, prompt: string, history: DraftMessage[]) => Promise<PatchPreview | null>;
-  onSendApproved: (day: number, prompt: string, patch: ItineraryPatch) => Promise<boolean>;
-  onSubmit: (day: number, prompt: string) => Promise<boolean>;
+  onSendApproved: (day: number, prompt: string, patch: ItineraryPatch, apply?: boolean) => Promise<boolean>;
   onReview: (proposalId: string, action: 'accept' | 'reject') => void;
   onEdit: (proposalId: string, prompt: string) => Promise<boolean>;
   onWithdraw: (proposalId: string) => void;
@@ -1465,20 +1457,16 @@ function DayProposalBox({
   const [thinking, setThinking] = useState(false);
   const [sendingTurn, setSendingTurn] = useState<number | null>(null);
   const canReview = canReviewRole(role);
-  // The Master Planner's own suggestion goes straight in — they review it in this
-  // same panel, so drafting a proposal for themselves is friction.
-  const draftsInChat = role === 'collaborator';
+  // Everyone drafts in the chat now. The difference is the last step: a Follower
+  // sends the change for approval, while the Master Planner applies it directly,
+  // since they are the one who would approve it anyway.
+  const canApplyDirectly = canReview;
 
   if (role === null) return null;
 
   const send = async () => {
     const prompt = input.trim();
     if (!prompt || submitting || thinking) return;
-
-    if (!draftsInChat) {
-      if (await onSubmit(day, prompt)) setInput('');
-      return;
-    }
 
     setThinking(true);
     const history: DraftMessage[] = turns.flatMap((turn) => [
@@ -1501,10 +1489,11 @@ function DayProposalBox({
     const option = turn?.options[turn.selected];
     if (!option || sendingTurn !== null) return;
     setSendingTurn(index);
-    const ok = await onSendApproved(day, turn.prompt, option.patch);
+    const ok = await onSendApproved(day, turn.prompt, option.patch, canApplyDirectly);
     setSendingTurn(null);
     if (ok) {
-      // Sent — it now shows as a pending suggestion above, so clear the draft.
+      // Sent — it now shows above (applied, or waiting for approval), so clear
+      // the draft thread.
       setTurns([]);
       setInput('');
     }
@@ -1531,8 +1520,10 @@ function DayProposalBox({
             <div className="rounded-xl border border-blue-200 dark:border-blue-800/50 bg-blue-50/60 dark:bg-blue-900/15 p-2.5 space-y-2">
               <div className="text-[12px] font-semibold text-gray-900 dark:text-gray-100">
                 {turn.options.length > 1
-                  ? `Pick one to send (${turn.options.length} options)`
-                  : 'Send this to the Master Planner?'}
+                  ? `Pick one (${turn.options.length} options)`
+                  : canApplyDirectly
+                    ? 'Apply this to the itinerary?'
+                    : 'Send this to the Master Planner?'}
               </div>
 
               {turn.options.length > 1 ? (
@@ -1601,7 +1592,7 @@ function DayProposalBox({
                   className="flex-1 px-3 py-1.5 text-[13px] font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-1.5"
                 >
                   {sendingTurn === i ? <span className="animate-spin">⟳</span> : <Check size={13} />}
-                  Send for approval
+                  {canApplyDirectly ? 'Apply to itinerary' : 'Send for approval'}
                 </button>
               </div>
             </div>
@@ -1634,9 +1625,9 @@ function DayProposalBox({
         </button>
       </div>
       <div className="text-[11px] text-gray-400 dark:text-gray-500">
-        {draftsInChat
-          ? 'Nothing is sent until you pick an option — ask for alternatives to compare.'
-          : 'Enter to send · Shift+Enter for a new line.'}
+        {canApplyDirectly
+          ? 'Nothing changes until you pick an option — ask for alternatives to compare.'
+          : 'Nothing is sent until you pick an option — ask for alternatives to compare.'}
       </div>
 
       {canReview && proposals.length > 0 && (
@@ -2121,7 +2112,12 @@ function SavedTripCard({ trip, onUpdate, onDelete, onLeave, onPayloadRefresh, is
   // day is passed so the AI targets that day; the stored prompt stays as typed.
   // A reviewed patch is sent back verbatim so the Master Planner sees exactly
   // what was confirmed.
-  const submitProposal = async (day: number, prompt: string, patch?: ItineraryPatch): Promise<boolean> => {
+  const submitProposal = async (
+    day: number,
+    prompt: string,
+    patch?: ItineraryPatch,
+    apply = false,
+  ): Promise<boolean> => {
     if (!prompt.trim() || submittingDay !== null) return false;
     setSubmittingDay(day);
     try {
@@ -2133,6 +2129,11 @@ function SavedTripCard({ trip, onUpdate, onDelete, onLeave, onPayloadRefresh, is
       const data = await res.json();
       if (data.proposal) {
         setProposals((prev) => [...prev, data.proposal]);
+        // The Master Planner is the approver, so their own change lands straight
+        // away instead of waiting in their queue. It still records a proposal.
+        if (apply && data.proposal.id) {
+          await reviewProposal(data.proposal.id, 'accept');
+        }
         setSubmittingDay(null);
         return true;
       }
@@ -2381,7 +2382,6 @@ function SavedTripCard({ trip, onUpdate, onDelete, onLeave, onPayloadRefresh, is
             proposalRole={proposalRole}
             proposals={proposals}
             submittingDay={submittingDay}
-            onSubmitProposal={submitProposal}
             onPreviewProposal={previewProposal}
             onSendApprovedProposal={submitProposal}
             onReviewProposal={reviewProposal}
