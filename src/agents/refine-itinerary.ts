@@ -331,6 +331,11 @@ Instructions:
 - For replace_stop: provide targetStopName (the EXACT bolded stop name as it appears in the itinerary, or a short recognizable subset/keyword from it) and newDetails with the new name and/or description. The new name should be a real, well-known alternative for the destination.
 - For remove_stop: provide targetStopName of the stop to remove. If the user wants to drop a stop because they don't like it (e.g. "I don't drink beer", "replace the brewery"), use remove_stop and then optionally add_stop a replacement.
 - For add_stop: provide newDetails with name, description, and time_slot ("morning", "afternoon", or "evening").
+- Time-slot rules — a venue must be open when you place it:
+  - Morning (09:00–12:00) / Afternoon (13:00–17:00): museums, galleries, gardens, botanical gardens, arboretums, zoos, aquariums, libraries, palaces, shrines, temples, and anything with standard daytime hours.
+  - Evening (18:00–22:00): dinner, night markets, rooftop bars, sunset viewpoints, illuminated landmarks, nightlife, and evening walks.
+  - NEVER place a museum, gallery, garden, botanical garden, zoo, aquarium, library, or palace in the Evening — they close in the late afternoon.
+  - If the user asks for the Evening but the venue closes earlier, place it in the Afternoon and say so in the description.
 - For update_note: provide targetStopName and newDetails.description with the updated description.
 - If the user's request cannot be matched to a specific stop, use remove_stop for the closest bolded landmark and add_stop to insert a suitable replacement.
 - If the user is giving a dietary or preference constraint (e.g. "I don't drink beer", "no pork", "vegetarian"), remove the offending stop and add an appropriate alternative.

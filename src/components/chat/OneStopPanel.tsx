@@ -16,6 +16,7 @@ import type {
   ItineraryPatch,
 } from '@/lib/chat-state';
 import { stripFollowUpQuestions } from '@/lib/itinerary-cleanup';
+import { findEveningClosedVenues } from '@/lib/itinerary-feasibility';
 import type { DayTransport } from '@/agents/transport';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -490,6 +491,10 @@ function DayPanel({
   const [expanded, setExpanded] = useState(false);
   const fb = getDayFeedback(trip, day);
   const pendingCount = proposals.filter((p) => p.status === 'pending').length;
+  // Venues that close in the late afternoon but sit in the Evening block.
+  const feasibility = findEveningClosedVenues(trip.payload.itinerary || '').filter(
+    (issue) => issue.day === day,
+  );
 
   return (
     <div className="md:col-span-1 md:sticky md:top-4 md:self-start rounded-xl border border-gray-100 dark:border-gray-700/50 p-3 bg-gray-50/50 dark:bg-gray-800/30">
@@ -524,6 +529,13 @@ function DayPanel({
       </button>
 
       <div className={`${expanded ? 'block' : 'hidden'} md:block mt-2 md:mt-0`}>
+        {feasibility.length > 0 && (
+          <div className="mb-3 text-[11px] text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 border border-amber-200/70 dark:border-amber-800/40 rounded-lg px-2 py-1.5">
+            <span className="font-medium">Check the hours:</span>{' '}
+            {feasibility.map((i) => i.name).join(', ')} usually closes in the late afternoon, but it
+            is in the Evening block.
+          </div>
+        )}
         <DayFeedbackBar dayIndex={day} trip={trip} onUpdate={onUpdate} />
         <DayProposalBox
           day={day}
@@ -1212,6 +1224,7 @@ interface PatchPreview {
   dayIndex: number | null;
   patch: ItineraryPatch;
   wouldChange: boolean;
+  warning?: string | null;
 }
 
 const ROLE_LABELS: Record<TripRole, string> = {
@@ -1480,6 +1493,11 @@ function DayProposalBox({
             <div className="text-[11px] text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 rounded-lg px-2 py-1.5">
               This doesn&apos;t match anything in the itinerary yet, so the Master Planner may not be
               able to apply it. Naming the day or the exact stop usually helps.
+            </div>
+          )}
+          {preview.warning && (
+            <div className="text-[11px] text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 rounded-lg px-2 py-1.5">
+              {preview.warning}
             </div>
           )}
           <div className="flex items-center gap-2">

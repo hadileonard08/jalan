@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@clerk/nextjs/server';
 import { generateItineraryPatch, mergeItineraryPatch } from '../../../../../../agents/refine-itinerary';
 import { getTripAccess } from '../../../../../../lib/trip-access';
+import { eveningFeasibilityWarning } from '../../../../../../lib/itinerary-feasibility';
 
 export const dynamic = 'force-dynamic';
 
@@ -39,10 +40,15 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     // Tell the suggester up front whether this would actually change anything.
     // A patch that matches nothing is rejected on accept (422), so catching it
     // here saves the Master Planner a dead suggestion.
-    const wouldChange = mergeItineraryPatch(itinerary, patch) !== itinerary;
+    const merged = mergeItineraryPatch(itinerary, patch);
+    const wouldChange = merged !== itinerary;
+
+    // Warn when the change lands a venue that closes in the late afternoon in the
+    // Evening block — the suggester can fix it before it reaches the reviewer.
+    const warning = wouldChange ? eveningFeasibilityWarning(merged) : null;
 
     return NextResponse.json({
-      preview: { prompt: prompt.trim(), dayIndex: day, patch, wouldChange },
+      preview: { prompt: prompt.trim(), dayIndex: day, patch, wouldChange, warning },
     });
   } catch (error) {
     console.error('Proposal preview error:', error);
