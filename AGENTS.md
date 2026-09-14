@@ -117,6 +117,8 @@ npx tsx scripts/smoke-test.ts
 - `latestClosingMinutes()` parses `opening_hours` conservatively: it bails out on `sunrise/sunset`, `[`, `||`, `+`, `@`, and takes the LATEST closing across the week so day-specific hours can't cause a false positive. `findEveningHoursConflicts()` flags an Evening stop whose venue shuts by 19:00.
 - Layered with the older name-based heuristic in `itinerary-feasibility.ts`: real hours win, and the heuristic is dropped for any venue that has them.
 - **Advisory only** — never a regeneration trigger, since OSM coverage is uneven and mapper-maintained.
+- **Only image alts were being checked, which missed the very stops suggestions add.** A patch inserts bolded text with no image, so a patched-in venue (SIFF Cinema Egyptian) was never venue-checked. `extractStopNames()` now unions image alts with bolded stops (excluding the injected transport note, whose bold text is modes rather than venues): 7 names became 37 on the Seattle trip, and the closed cinema surfaced.
+- A name often matches several OSM elements (the Space Needle is both a tower and a building outline, and only one carries `opening_hours`), so `mergeVenueElements()` merges tags instead of keeping the first match.
 - Test: `npx tsx scripts/test-venue-status.ts` (pure parsing tests always run; the live Overpass section reports SKIP when throttled rather than failing).
 
 ### RAG Evaluation

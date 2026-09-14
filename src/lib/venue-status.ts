@@ -83,30 +83,44 @@ async function fetchFromOsm(names: string[], destination?: string): Promise<Map<
     const data = (await res.json()) as {
       elements?: { tags?: Record<string, string> }[];
     };
-    for (const element of data.elements || []) {
-      const tags = element.tags || {};
-      const name = tags.name;
-      if (!name) continue;
-      // Match back to the name we asked for, case-insensitively.
-      const requested = names.find((n) => n.toLowerCase() === name.toLowerCase());
-      if (!requested) continue;
-
-      // A name often matches several elements — the tower *and* its building
-      // outline, say — and only some carry the useful tags. Merge them instead
-      // of keeping whichever came back first.
-      const existing = found.get(requested);
-      found.set(requested, {
-        name: requested,
-        closed: closureEvidence(tags) || existing?.closed,
-        openingHours: tags.opening_hours || existing?.openingHours,
-        source: 'osm',
-      });
+    for (const [name, status] of mergeVenueElements(names, data.elements || [])) {
+      found.set(name, status);
     }
   } catch {
     // Overpass is fair-use and throttles; silence beats a wrong answer.
   }
 
   return found;
+}
+
+/**
+ * Folds Overpass elements onto the names that were asked for.
+ *
+ * A name often matches several elements — the Space Needle is both a tower and a
+ * building outline, and only one carries `opening_hours` — so tags are merged
+ * rather than keeping whichever element happened to come back first.
+ */
+export function mergeVenueElements(
+  names: string[],
+  elements: { tags?: Record<string, string> }[],
+): Map<string, VenueStatus> {
+  const merged = new Map<string, VenueStatus>();
+  for (const element of elements) {
+    const tags = element.tags || {};
+    const name = tags.name;
+    if (!name) continue;
+    const requested = names.find((n) => n.toLowerCase() === name.toLowerCase());
+    if (!requested) continue;
+
+    const existing = merged.get(requested);
+    merged.set(requested, {
+      name: requested,
+      closed: closureEvidence(tags) || existing?.closed,
+      openingHours: tags.opening_hours || existing?.openingHours,
+      source: 'osm',
+    });
+  }
+  return merged;
 }
 
 // --- Wikipedia fallback -----------------------------------------------------
@@ -337,6 +351,31 @@ export function findEveningStops(itinerary: string): { day: number; name: string
     for (const name of boldNames(eveningSection(block))) stops.push({ day, name });
   }
   return stops;
+}
+
+/**
+ * Every stop name in the itinerary: image alts plus bolded stops.
+ *
+ * Reading only image alts misses any stop added by an approved edit — a patch
+ * inserts bolded text without an image — so the very venues a Follower suggests
+ * were the ones never checked for being closed.
+ */
+export function extractStopNames(itinerary: string): string[] {
+  const names: string[] = [];
+
+  for (const match of itinerary.matchAll(/!\[IMAGE:\s*([^\]]+)\]/gi)) names.push(match[1].trim());
+  for (const match of itinerary.matchAll(/!\[([^\]]+)\]\([^)]*\)/g)) {
+    const alt = match[1].trim();
+    if (alt && !/^IMAGE:/i.test(alt)) names.push(alt);
+  }
+
+  for (const { block } of splitDayBlocks(itinerary)) {
+    // Drop the injected transport note — its bold text is modes, not venues.
+    const body = block.split(/\*\*[^*]*Getting around[^*]*\*\*/i)[0];
+    names.push(...boldNames(body));
+  }
+
+  return [...new Set(names.filter(Boolean))];
 }
 
 /** Clears the in-process caches. Test helper. */

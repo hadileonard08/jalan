@@ -1,5 +1,5 @@
 import { verifyItineraryLandmarks, extractLandmarkNames } from './itinerary-guardrails';
-import { fetchVenueStatus, findEveningHoursConflicts } from '../lib/venue-status';
+import { fetchVenueStatus, findEveningHoursConflicts, extractStopNames } from '../lib/venue-status';
 import { eveningFeasibilityWarnings } from '../lib/itinerary-feasibility';
 
 // Deterministic itinerary checks, shared by the generation graph and by the
@@ -215,7 +215,10 @@ export async function runItineraryChecks({
   // guardrails merely confirm a venue exists, and the Critic has no
   // opening-status context to judge.
   if (includeVenueStatus) {
-    const names = extractLandmarkNames(landmarkScope || itinerary);
+    // Every stop, not just the days' hero landmarks — a stop added by an
+    // approved edit is bolded text with no image, and those are exactly the
+    // venues a suggestion introduces.
+    const names = extractStopNames(landmarkScope || itinerary);
     const statuses = await fetchVenueStatus(names, destination);
 
     // Real hours beat the name heuristic, so drop its guess for any venue we

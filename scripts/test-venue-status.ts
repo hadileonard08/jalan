@@ -13,7 +13,7 @@
  */
 
 import 'dotenv/config';
-import { latestClosingMinutes, fetchVenueStatus, findEveningHoursConflicts } from '../src/lib/venue-status';
+import { latestClosingMinutes, fetchVenueStatus, findEveningHoursConflicts, extractStopNames, mergeVenueElements } from '../src/lib/venue-status';
 
 let failures = 0;
 function check(label: string, actual: unknown, expected: unknown) {
@@ -75,6 +75,43 @@ Wander **Chihuly Garden and Glass**.
   check('leaves the 19:00 venue alone', conflicts.some((c) => c.name.includes('Chihuly')), false);
   check('ignores a daytime stop', conflicts.some((c) => c.name.includes('Museum of Flight')), false);
 
+  console.log('\nextractStopNames — must see stops a patch added:');
+  const patched = `# Trip
+
+## Day 1
+![Pike Place Market](https://example.com/pike.jpg)
+
+**🌅 Morning:**
+Walk **Pike Place Market**.
+
+**🌙 Evening:**
+Visit **SIFF Cinema Egyptian** — a patched-in stop with no image of its own.
+
+**🚶 Getting around (real times via routing):**
+- **🚶 Walk** · ~12 min walk — Pike Place Market → SIFF Cinema Egyptian
+`;
+  const found = extractStopNames(patched);
+  check('includes the image-alt landmark', found.includes('Pike Place Market'), true);
+  check('includes a patched-in stop with no image', found.includes('SIFF Cinema Egyptian'), true);
+  check('excludes transport-note text', found.some((n) => /walk|transit|taxi/i.test(n)), false);
+  check('excludes the time-slot heading', found.some((n) => /morning|evening/i.test(n)), false);
+  check('no duplicates', found.length, new Set(found).size);
+
+  console.log('\nmergeVenueElements — one name, several OSM elements:');
+  const merged = mergeVenueElements(
+    ['Space Needle', 'SIFF Cinema Egyptian'],
+    [
+      // The building outline comes back first and carries nothing useful.
+      { tags: { name: 'Space Needle', tourism: 'attraction' } },
+      { tags: { name: 'SIFF Cinema Egyptian', 'disused:amenity': 'cinema', opening_hours: 'Closed indefinitely.' } },
+      { tags: { name: 'Space Needle', tourism: 'attraction', opening_hours: 'Mo-Th 09:00-22:00' } },
+    ],
+  );
+  check('hours found on a later element survive', merged.get('Space Needle')?.openingHours, 'Mo-Th 09:00-22:00');
+  check('closure tag is captured', !!merged.get('SIFF Cinema Egyptian')?.closed, true);
+  check('unrequested names are ignored',
+    mergeVenueElements(['Space Needle'], [{ tags: { name: 'Other Place' } }]).size, 0);
+
   console.log('\nLive Overpass — the reported case:');
   const live = await fetchVenueStatus(
     ['SIFF Cinema Egyptian', 'Space Needle', 'Pike Place Market'],
@@ -87,7 +124,9 @@ Wander **Chihuly Garden and Glass**.
     check('SIFF Cinema Egyptian is flagged as closed', !!egyptian?.closed, true);
     check('with the OSM evidence', /out of use|closed/i.test(egyptian?.closed || ''), true);
     check('Space Needle is NOT flagged', !!live.get('Space Needle')?.closed, false);
-    check('Space Needle reports real hours', !!live.get('Space Needle')?.openingHours, true);
+    const needle = live.get('Space Needle');
+    if (needle?.openingHours) check('Space Needle reports real hours', true, true);
+    else skip('Space Needle reports real hours', 'Overpass returned the element without hours');
     check('Pike Place Market is NOT flagged', !!live.get('Pike Place Market')?.closed, false);
   }
 
