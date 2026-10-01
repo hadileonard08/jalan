@@ -4,6 +4,10 @@ import { generateItineraryPatchOptions, mergeItineraryPatch } from '../../../../
 import { getTripAccess } from '../../../../../../lib/trip-access';
 import { affectedDaysFromPatch } from '../../../../../../lib/refresh-enrichment';
 import { runItineraryChecks, type ItineraryCheckResult } from '../../../../../../agents/itinerary-checks';
+import {
+  isObviouslyOffTopicTravelRequest,
+  OFF_TOPIC_TRAVEL_REPLY,
+} from '../../../../../../lib/travel-chat-scope';
 
 export const dynamic = 'force-dynamic';
 
@@ -25,6 +29,21 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       return NextResponse.json({ error: 'prompt is required' }, { status: 400 });
     }
     const day = Number.isInteger(dayIndex) && dayIndex > 0 ? (dayIndex as number) : null;
+
+    // Obvious coding/homework requests never reach the model, so they consume no
+    // AI tokens and cannot produce an itinerary patch. Return the normal
+    // answer-only preview shape so the chat renders the boundary as Jalan's reply.
+    if (isObviouslyOffTopicTravelRequest(prompt)) {
+      return NextResponse.json({
+        preview: {
+          prompt: prompt.trim(),
+          dayIndex: day,
+          answer: OFF_TOPIC_TRAVEL_REPLY,
+          options: [],
+          offTopic: true,
+        },
+      });
+    }
 
     const payload = JSON.parse(trip.payload || '{}');
     const itinerary = payload.itinerary || '';
