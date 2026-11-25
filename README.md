@@ -52,7 +52,7 @@ The app uses a **hybrid Gemini model configuration** to balance quality and cost
 | **criticNode** | `gemini-3.5-flash` | Quality evaluation — needs strong reasoning to catch hallucinations |
 | **applyRefinements** | `gemini-3.5-flash-lite` | Delta Update — structured JSON patch output, surgical edits only |
 | extractNode | `gemini-3.5-flash-lite` | Quick JSON entity extraction (~1s) |
-| clarifyNode | `gemini-3.5-flash-lite` | Quick follow-up question (~1s) |
+| clarifyNode | `gemini-3.5-flash-lite` (vague only) | Vague-message follow-up (~1s); missing-field questions are templated — no call |
 | answerNode | `gemini-3.5-flash-lite` | Quick factual answers (~1s) |
 | generatePackingTips | `gemini-3.5-flash-lite` | Short list (~1s) |
 | generateTitle | `gemini-3.5-flash-lite` | Quick title (~1s) |
@@ -70,7 +70,7 @@ flowchart TD
 
     state[("State — persisted by the Postgres checkpointer<br/>thread_id = conversation.id<br/>durable: currentItinerary · previousItineraries · clarificationCount<br/>per-run fields cleared on entry")]
     extract["Extract<br/>[LLM Router]<br/>parse intent + entities<br/>reads currentItinerary"]
-    clarifyAsk["Clarify Ask<br/>[LLM Agent]<br/>writes the follow-up question"]
+    clarifyAsk["Clarify Ask<br/>[Mixed]<br/>missing fields → template<br/>vague → LLM question"]
     clarify["Clarify<br/>[Interrupt]<br/>suspends the run<br/>waits for the reply<br/>clarificationCount + 1 (on resume)"]
     clarifyLimit["Clarify Limit<br/>[Safe Fallback]<br/>stop asking, suggest phrasing<br/>resets clarificationCount"]
     gather["Gather<br/>[Tool Integration]<br/>weather + news + deals + images"]
@@ -105,7 +105,8 @@ flowchart TD
     answer --> END
 
     %% The clarification loop, entirely inside the graph: Clarify Ask writes the
-    %% question, Clarify suspends the run with interrupt(), and the user's reply
+    %% question (template for missing fields, LLM for vague), Clarify suspends
+    %% the run with interrupt(), and the user's reply
     %% resumes it straight back into Extract — up to MAX_CLARIFICATIONS = 3 in a
     %% row, after which the router diverts to Clarify Limit.
     clarifyAsk --> clarify
@@ -136,7 +137,7 @@ flowchart TD
 | Node | Type | Description |
 |------|------|-------------|
 | **Extract** | LLM Router | Uses `chrono-node` + LLM to parse destination, dates, duration, cabin, travelers, budget, and intent. Yearless dates resolve to the next future occurrence; explicit past travel dates are rejected. Enforces a 30-day duration cap. Also clears every per-run state field at the start of each turn, since thread state is checkpointed. |
-| **Clarify Ask** | LLM Agent | Writes the follow-up question for missing fields, or the message asking the user to replace an invalid/past date range. Runs exactly once per question — the interrupted node below is the one that re-executes. |
+| **Clarify Ask** | Mixed | Missing-field questions (only `destination`/`startDate` are required) come from a template — no model call. The LLM writes the question only for `vague` messages and invalid/past date replies run as a templated message. Runs exactly once per question — the interrupted node below is the one that re-executes. |
 | **Clarify** | Interrupt | Calls `interrupt()` to **suspend the run mid-graph** and wait for the user. On resume it increments `clarificationCount` and loops straight back into Extract. Kept free of side effects because LangGraph re-runs it from the top on resume. |
 | **Clarify Limit** | Safe Fallback | Loop guard. After three clarifying questions in a row it stops asking and answers with concrete phrasing examples ("5 days in Tokyo in October"), then resets `clarificationCount` to 0. |
 | **User Reply** | Language State Machine | The request boundary, not a node that runs. Marks where the human sits in the loop: the run is suspended at Clarify, the user answers on their next message, and the chat route resumes the suspended node with the reply. |
@@ -157,10 +158,10 @@ The Extract node is an **LLM router** — it classifies the user's intent and ch
 |-----------|--------|-----------------|-----------|
 | *"Plan a 5-day trip to Tokyo in October"* | `plan_trip` | No | **Gather** (resolves to the next future October) |
 | *"Plan a trip to Tokyo in October 2025"* | `plan_trip` | Invalid past date | **Clarify** (no itinerary is generated) |
-| *"Plan a trip to Japan"* | `plan_trip` | Yes (no dates) | **Clarify** ("When are you thinking of visiting?") |
+| *"Plan a trip to Japan"* | `plan_trip` | Yes (no dates) | **Clarify** (templated "when are you traveling?" — no model call) |
 | *"Find deals to Bangkok in January"* | `ask_question` | No | **Answer** (deal lookup only, no itinerary) |
-| *"What's the weather like in Bali?"* | `ask_question` | Yes (no dates) | **Clarify** ("When are you going?") |
-| *"I want to travel somewhere"* | `vague` | — | **Clarify** (warm follow-up with example ideas) |
+| *"What's the weather like in Bali?"* | `ask_question` | Yes (no dates) | **Clarify** (templated "when are you traveling?" — no model call) |
+| *"I want to travel somewhere"* | `vague` | — | **Clarify** (LLM-written warm follow-up with example ideas) |
 | *"Hi!"* | `greeting` | — | **Respond** (greeting back) |
 | *"Make it shorter"* (after a plan) | `refine` | No | **Apply Refinements** (JSON Patch on existing itinerary — bypasses Gather/Generate) |
 | *"somewhere warm I guess"* (3 questions already asked) | `vague` | — | **Clarify Limit** (stops asking, suggests how to phrase it, resets the counter) |
@@ -169,12 +170,12 @@ The Extract node is an **LLM router** — it classifies the user's intent and ch
 
 **The clarification loop is a real in-graph loop.** The exchange is split across two nodes so the expensive half runs exactly once:
 
-1. **Clarify Ask** writes the question (one LLM call) and hands off to…
+1. **Clarify Ask** writes the question (a template for missing fields, one LLM call for vague messages) and hands off to…
 2. **Clarify**, which calls `interrupt()` — the run **suspends mid-graph**, it does not finish. There is deliberately **no `Clarify → END` edge**.
 3. The user's reply arrives on the next request. The chat route sees the thread is suspended (`getState().next.length > 0`) and continues it with `Command({ resume: message, update: { history, userMessage } })`.
 4. `Clarify` returns, the `clarify → extract` edge fires, and **Extract evaluates the reply together with the question it responds to** — then loops again if it still needs more.
 
-That's why the split exists: LangGraph re-executes an interrupted node from the top on resume, so anything before `interrupt()` runs twice. The LLM call lives in Clarify Ask, which is *not* the interrupted node — a test asserts the pre-interrupt node does not re-run.
+That's why the split exists: LangGraph re-executes an interrupted node from the top on resume, so anything before `interrupt()` runs twice. The question text lives in Clarify Ask, which is *not* the interrupted node — a test asserts the pre-interrupt node does not re-run.
 
 Repeat up to `MAX_CLARIFICATIONS = 3` in a row, after which the router diverts to **Clarify Limit**, which does end the run. **Solid edges run inside a run; dotted edges cross the request boundary** — the `User Reply` box marks where the human sits in that loop.
 
@@ -566,7 +567,7 @@ src/
     destination-images.ts    # Image hydration: Wikimedia + Openverse + Pexels, with metadata-aware relevance scoring
     weather.ts               # Open-Meteo forecast + climate projections
     news-search.ts           # Destination news search (Gemini web search grounding)
-    graph.ts                 # Itinerary graph for deal modal (architect → critic)
+    graph.ts                 # Deal-modal itinerary graph (architect → critic); critic shares runItineraryChecks + evaluateRag with chat
     checkpointer.ts          # LangGraph Postgres checkpointer (per-thread state, pg pool capped at 1)
     ...
   lib/
